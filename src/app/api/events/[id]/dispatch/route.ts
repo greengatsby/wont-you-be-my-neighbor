@@ -1,0 +1,201 @@
+import { createAdminClient } from '@/utils/supabase/admin'
+import { createClient } from '@/utils/supabase/server'
+import { NextResponse } from 'next/server'
+
+export async function POST(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: profile } = await supabase
+    .from('neighbors_users')
+    .select('is_admin')
+    .eq('id', user.id)
+    .single()
+  if (!profile?.is_admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  const { roundId } = await request.json()
+  const admin = createAdminClient()
+
+  // Get round info
+  const { data: round } = await admin
+    .from('neighbors_rounds')
+    .select('*')
+    .eq('id', roundId)
+    .single()
+
+  if (!round) return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+
+  // Get event participants
+  const { data: participants } = await admin
+    .from('neighbors_event_participants')
+    .select('user_id')
+    .eq('event_id', params.id)
+
+  if (!participants?.length) {
+    return NextResponse.json({ error: 'No participants' }, { status: 400 })
+  }
+
+  const userIds = participants.map((p) => p.user_id)
+
+  let rooms: { userIds: string[]; topic?: string }[] = []
+
+  if (round.round_type === 'random') {
+    rooms = createRandomPairs(userIds)
+  } else if (round.round_type === 'matched') {
+    rooms = await createMatchedPairs(admin, userIds)
+  } else if (round.round_type === 'topic') {
+    rooms = await createTopicRooms(admin, userIds, round.topic)
+  }
+
+  // Mark round as active
+  await admin
+    .from('neighbors_rounds')
+    .update({ status: 'active', started_at: new Date().toISOString() })
+    .eq('id', roundId)
+
+  // Create breakout rooms in DB
+  const createdRooms = []
+  for (const room of rooms) {
+    const roomName = `breakout-${roundId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+    const { data: breakoutRoom } = await admin
+      .from('neighbors_breakout_rooms')
+      .insert({
+        round_id: roundId,
+        livekit_room_name: roomName,
+        topic: room.topic || round.topic || null,
+      })
+      .select()
+      .single()
+
+    if (breakoutRoom) {
+      // Add members
+      await admin.from('neighbors_room_members').insert(
+        room.userIds.map((uid) => ({
+          room_id: breakoutRoom.id,
+          user_id: uid,
+        }))
+      )
+
+      createdRooms.push({
+        ...breakoutRoom,
+        members: room.userIds,
+      })
+    }
+  }
+
+  return NextResponse.json({ rooms: createdRooms })
+}
+
+function createRandomPairs(userIds: string[]) {
+  const shuffled = [...userIds].sort(() => Math.random() - 0.5)
+  const pairs: { userIds: string[] }[] = []
+
+  for (let i = 0; i < shuffled.length; i += 2) {
+    if (i + 1 < shuffled.length) {
+      pairs.push({ userIds: [shuffled[i], shuffled[i + 1]] })
+    } else {
+      // Odd person out — add to last room
+      if (pairs.length > 0) {
+        pairs[pairs.length - 1].userIds.push(shuffled[i])
+      } else {
+        pairs.push({ userIds: [shuffled[i]] })
+      }
+    }
+  }
+
+  return pairs
+}
+
+async function createMatchedPairs(admin: any, userIds: string[]) {
+  // Get interest embeddings for matching
+  const { data: users } = await admin
+    .from('neighbors_users')
+    .select('id, interest_embedding')
+    .in('id', userIds)
+
+  // If no embeddings yet, fall back to random
+  const withEmbeddings = users?.filter((u: any) => u.interest_embedding) || []
+  if (withEmbeddings.length < 2) {
+    return createRandomPairs(userIds)
+  }
+
+  // Simple greedy matching by cosine similarity
+  const matched = new Set<string>()
+  const pairs: { userIds: string[] }[] = []
+
+  // For users without embeddings, pair randomly
+  const noEmbedding = userIds.filter(
+    (id) => !withEmbeddings.find((u: any) => u.id === id)
+  )
+
+  // For users with embeddings, use pgvector similarity
+  // For now, use a simpler approach: pair sequentially from the embedding list
+  // In production, you'd do proper cosine similarity matching
+  for (let i = 0; i < withEmbeddings.length; i += 2) {
+    if (i + 1 < withEmbeddings.length) {
+      pairs.push({
+        userIds: [withEmbeddings[i].id, withEmbeddings[i + 1].id],
+      })
+      matched.add(withEmbeddings[i].id)
+      matched.add(withEmbeddings[i + 1].id)
+    }
+  }
+
+  // Combine leftover embedded users with non-embedded users
+  const remaining = [
+    ...withEmbeddings.filter((u: any) => !matched.has(u.id)).map((u: any) => u.id),
+    ...noEmbedding,
+  ]
+
+  pairs.push(...createRandomPairs(remaining))
+
+  return pairs
+}
+
+async function createTopicRooms(admin: any, userIds: string[], topic?: string | null) {
+  if (!topic) {
+    // No specific topic — group by most common interest tags
+    const { data: tags } = await admin
+      .from('neighbors_interest_tags')
+      .select('user_id, tag')
+      .in('user_id', userIds)
+
+    if (!tags?.length) return createRandomPairs(userIds)
+
+    // Group users by their top tag
+    const tagGroups = new Map<string, string[]>()
+    for (const t of tags) {
+      const group = tagGroups.get(t.tag) || []
+      group.push(t.user_id)
+      tagGroups.set(t.tag, group)
+    }
+
+    const rooms: { userIds: string[]; topic: string }[] = []
+    const assigned = new Set<string>()
+
+    // Create rooms for tags with 2+ members
+    for (const [tag, members] of tagGroups) {
+      const unassigned = members.filter((id) => !assigned.has(id))
+      if (unassigned.length >= 2) {
+        rooms.push({ userIds: unassigned, topic: tag })
+        unassigned.forEach((id) => assigned.add(id))
+      }
+    }
+
+    // Remaining unassigned users go into a general room
+    const remaining = userIds.filter((id) => !assigned.has(id))
+    if (remaining.length > 0) {
+      rooms.push({ userIds: remaining, topic: 'General' })
+    }
+
+    return rooms
+  }
+
+  // Specific topic — everyone in one room
+  return [{ userIds, topic }]
+}
