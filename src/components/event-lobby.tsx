@@ -108,6 +108,30 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
     setEvent({ ...event, status: 'live' })
   }
 
+  async function handleEndEvent() {
+    const res = await fetch(`/api/events/${event.id}/end`, { method: 'POST' })
+    if (!res.ok) {
+      toast.error('Failed to end event')
+      return
+    }
+    toast.success('Event ended! Starting transcription...')
+    setEvent({ ...event, status: 'ended' })
+
+    // Trigger transcription
+    const transcribeRes = await fetch(`/api/events/${event.id}/transcribe`, { method: 'POST' })
+    const transcribeData = await transcribeRes.json()
+    if (transcribeRes.ok) {
+      toast.success(`Transcribed ${transcribeData.transcribed} recordings`)
+    }
+
+    // Trigger interest extraction + matching
+    const processRes = await fetch(`/api/events/${event.id}/process`, { method: 'POST' })
+    const processData = await processRes.json()
+    if (processRes.ok) {
+      toast.success(`Extracted interests for ${processData.interestsExtracted} participants, created ${processData.connectionsCreated} connections`)
+    }
+  }
+
   async function handleStartRound(roundId: string) {
     const res = await fetch(`/api/events/${event.id}/dispatch`, {
       method: 'POST',
@@ -174,15 +198,27 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
             </span>
           </div>
 
-          {isAdmin && !isLive && (
+          {isAdmin && !isLive && event.status !== 'ended' && (
             <Button onClick={handleStartEvent} className="w-full">
               Start Event
+            </Button>
+          )}
+
+          {isAdmin && isLive && (
+            <Button variant="destructive" onClick={handleEndEvent} className="w-full">
+              End Event & Process Recordings
             </Button>
           )}
 
           {isLive && !isAdmin && (
             <div className="rounded-lg bg-muted p-4 text-center text-sm text-muted-foreground">
               Waiting for the host to start the next round...
+            </div>
+          )}
+
+          {event.status === 'ended' && (
+            <div className="rounded-lg bg-muted p-4 text-center text-sm text-muted-foreground">
+              This event has ended. Check your <a href="/connections" className="underline font-medium">connections</a> for matches!
             </div>
           )}
         </CardContent>

@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
+import { startRoomRecording } from '@/lib/livekit'
 
 export async function POST(
   request: Request,
@@ -80,6 +81,20 @@ export async function POST(
           user_id: uid,
         }))
       )
+
+      // Start recording the breakout room
+      try {
+        const recording = await startRoomRecording(roomName, breakoutRoom.id)
+        await admin.from('neighbors_recordings').insert({
+          room_id: breakoutRoom.id,
+          egress_id: recording.egressId,
+          storage_url: recording.storageUrl,
+          transcription_status: 'pending',
+        })
+      } catch (err) {
+        console.error(`Failed to start recording for room ${breakoutRoom.id}:`, err)
+        // Don't block room creation if recording fails
+      }
 
       createdRooms.push({
         ...breakoutRoom,
