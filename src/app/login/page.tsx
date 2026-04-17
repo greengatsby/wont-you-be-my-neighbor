@@ -29,6 +29,15 @@ function validateDisplayName(raw: string): { ok: true; value: string } | { ok: f
   return { ok: true, value: trimmed }
 }
 
+// Accept only same-origin paths. Anything else (absolute URL, protocol-relative,
+// backslash escapes) falls back to '/' to prevent open-redirect attacks via
+// the ?redirectTo= query param.
+function safeRedirectTarget(raw: string | null | undefined): string {
+  if (!raw) return '/'
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/'
+  return raw
+}
+
 type Step = 'phone' | 'otp' | 'consent' | 'name'
 
 export default function LoginPage() {
@@ -40,6 +49,14 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(true)
   const supabase = createClient()
+
+  // Resolve ?redirectTo= at the moment we actually redirect, so we don't
+  // depend on mount order between effects.
+  function goToRedirectTarget() {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    window.location.href = safeRedirectTarget(params.get('redirectTo'))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -64,7 +81,7 @@ export default function LoginPage() {
         profile.display_name.trim() !== DEFAULT_DISPLAY_NAME
 
       if (hasConsent && hasRealName) {
-        window.location.href = '/'
+        goToRedirectTarget()
         return
       }
 
@@ -125,7 +142,7 @@ export default function LoginPage() {
         profile.display_name.trim() !== DEFAULT_DISPLAY_NAME
 
       if (hasConsent && hasRealName) {
-        window.location.href = '/'
+        goToRedirectTarget()
         return
       }
 
@@ -191,7 +208,7 @@ export default function LoginPage() {
       toast.error('Could not save your name — please try again')
       return
     }
-    window.location.href = '/'
+    goToRedirectTarget()
   }
 
   if (bootstrapping) {

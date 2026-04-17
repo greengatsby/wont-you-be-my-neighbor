@@ -38,6 +38,13 @@ export async function updateSession(request: NextRequest) {
   if (!user && !isPublicPath) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    // Preserve where the user was trying to go so the login page can bounce
+    // them back after sign-in. Path + query only — no host/scheme, to avoid
+    // open-redirect risk if anyone ever injects absolute URLs.
+    const original = request.nextUrl.pathname + request.nextUrl.search
+    if (original && original !== '/' && !original.startsWith('/login')) {
+      url.searchParams.set('redirectTo', original)
+    }
     const redirect = NextResponse.redirect(url)
     supabaseResponse.cookies.getAll().forEach((c) =>
       redirect.cookies.set(c.name, c.value)
