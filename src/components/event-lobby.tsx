@@ -15,12 +15,21 @@ interface EventLobbyProps {
   rounds: any[]
   user: any
   participantCount: number
+  isParticipant: boolean
 }
 
-export function EventLobby({ event: initialEvent, rounds, user, participantCount: initialCount }: EventLobbyProps) {
+export function EventLobby({
+  event: initialEvent,
+  rounds,
+  user,
+  participantCount: initialCount,
+  isParticipant: initialIsParticipant,
+}: EventLobbyProps) {
   const supabase = useMemo(() => createClient(), [])
   const [event, setEvent] = useState(initialEvent)
   const [participantCount, setParticipantCount] = useState(initialCount)
+  const [isParticipant, setIsParticipant] = useState(initialIsParticipant)
+  const [rsvpPending, setRsvpPending] = useState(false)
   const [currentRoom, setCurrentRoom] = useState<{
     roomName: string
     prompt?: string
@@ -31,6 +40,8 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
 
   const isAdmin = user.is_admin
   const isLive = event.status === 'live'
+  const isScheduled = event.status === 'scheduled'
+  const isEnded = event.status === 'ended'
   const sortedRounds = [...rounds].sort((a, b) => a.round_number - b.round_number)
 
   // Subscribe to real-time updates
@@ -63,6 +74,26 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
             setActiveRound(round)
           }
         }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'neighbors_event_participants',
+          filter: `event_id=eq.${event.id}`,
+        },
+        () => setParticipantCount((c) => c + 1)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'neighbors_event_participants',
+          filter: `event_id=eq.${event.id}`,
+        },
+        () => setParticipantCount((c) => Math.max(0, c - 1))
       )
       .on(
         'postgres_changes',
@@ -155,6 +186,47 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
     setCurrentRoom(null)
   }
 
+  async function handleRsvp() {
+    if (rsvpPending) return
+    setRsvpPending(true)
+    setIsParticipant(true)
+    setParticipantCount((c) => c + 1)
+    const { error } = await supabase
+      .from('neighbors_event_participants')
+      .upsert(
+        { event_id: event.id, user_id: user.id },
+        { onConflict: 'event_id,user_id' }
+      )
+    setRsvpPending(false)
+    if (error) {
+      setIsParticipant(false)
+      setParticipantCount((c) => Math.max(0, c - 1))
+      toast.error('Could not RSVP — please try again')
+    } else {
+      toast.success('You\'re in — see you at the event!')
+    }
+  }
+
+  async function handleCancelRsvp() {
+    if (rsvpPending) return
+    setRsvpPending(true)
+    setIsParticipant(false)
+    setParticipantCount((c) => Math.max(0, c - 1))
+    const { error } = await supabase
+      .from('neighbors_event_participants')
+      .delete()
+      .eq('event_id', event.id)
+      .eq('user_id', user.id)
+    setRsvpPending(false)
+    if (error) {
+      setIsParticipant(true)
+      setParticipantCount((c) => c + 1)
+      toast.error('Could not leave — please try again')
+    } else {
+      toast.success('You\'ve left this event')
+    }
+  }
+
   // If in a breakout room, show the video room
   if (currentRoom) {
     return (
@@ -201,7 +273,8 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
             </span>
           </div>
 
-          {isAdmin && !isLive && event.status !== 'ended' && (
+          {/* Admin controls — shown first so the host can manage the event */}
+          {isAdmin && isScheduled && (
             <Button onClick={handleStartEvent} className="w-full">
               Start Event
             </Button>
@@ -213,13 +286,54 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
             </Button>
           )}
 
-          {isLive && !isAdmin && (
-            <div className="rounded-lg bg-muted p-4 text-center text-sm text-muted-foreground">
-              Waiting for the host to start the next round...
+          {/* RSVP — hosts can also take part in their own event */}
+          {!isEnded && !isParticipant && (
+            <Button
+              onClick={handleRsvp}
+              disabled={rsvpPending}
+              variant={isAdmin ? 'outline' : 'default'}
+              className="w-full"
+            >
+              {rsvpPending
+                ? 'Joining…'
+                : isAdmin
+                  ? 'Also take part as a participant'
+                  : isLive
+                    ? 'Join now'
+                    : 'RSVP to this event'}
+            </Button>
+          )}
+
+          {!isEnded && isParticipant && (
+            <div className="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm">
+                {isLive ? (
+                  <span className="text-muted-foreground">
+                    Waiting for the {isAdmin ? 'next round to start' : 'host to start the next round'}…
+                  </span>
+                ) : (
+                  <>
+                    <span className="font-medium">You&rsquo;re in.</span>{' '}
+                    <span className="text-muted-foreground">
+                      We&rsquo;ll open the lobby when the host starts the event.
+                    </span>
+                  </>
+                )}
+              </p>
+              {!isLive && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelRsvp}
+                  disabled={rsvpPending}
+                >
+                  {rsvpPending ? 'Leaving…' : 'Leave event'}
+                </Button>
+              )}
             </div>
           )}
 
-          {event.status === 'ended' && (
+          {isEnded && (
             <div className="rounded-lg bg-muted p-4 text-center text-sm text-muted-foreground">
               This event has ended. Check your <a href="/connections" className="underline font-medium">connections</a> for matches!
             </div>

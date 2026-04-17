@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,13 +10,75 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
 
+const DEFAULT_DISPLAY_NAME = 'Neighbor'
+const NAME_MIN = 2
+const NAME_MAX = 40
+
+function validateDisplayName(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+  const trimmed = raw.trim().replace(/\s+/g, ' ')
+  if (trimmed.length < NAME_MIN) {
+    return { ok: false, error: `Name must be at least ${NAME_MIN} characters` }
+  }
+  if (trimmed.length > NAME_MAX) {
+    return { ok: false, error: `Name must be at most ${NAME_MAX} characters` }
+  }
+  // Disallow things that are clearly not names (URLs, control chars).
+  if (/[<>{}\\]/.test(trimmed) || /https?:\/\//i.test(trimmed)) {
+    return { ok: false, error: 'Please enter a real name' }
+  }
+  return { ok: true, value: trimmed }
+}
+
+type Step = 'phone' | 'otp' | 'consent' | 'name'
+
 export default function LoginPage() {
   const [phone, setPhone] = useState('')
   const [otp, setOtp] = useState('')
-  const [step, setStep] = useState<'phone' | 'otp' | 'consent'>('phone')
+  const [step, setStep] = useState<Step>('phone')
   const [consents, setConsents] = useState({ recording: false, ai: false })
+  const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(false)
+  const [bootstrapping, setBootstrapping] = useState(true)
   const supabase = createClient()
+
+  useEffect(() => {
+    let cancelled = false
+    async function bootstrap() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (cancelled) return
+      if (!user) {
+        setBootstrapping(false)
+        return
+      }
+      const { data: profile } = await supabase
+        .from('neighbors_users')
+        .select('display_name, consent_recording, consent_ai_processing')
+        .eq('id', user.id)
+        .maybeSingle()
+      if (cancelled) return
+
+      const hasConsent = !!profile?.consent_recording && !!profile?.consent_ai_processing
+      const hasRealName =
+        !!profile?.display_name &&
+        profile.display_name.trim() !== '' &&
+        profile.display_name.trim() !== DEFAULT_DISPLAY_NAME
+
+      if (hasConsent && hasRealName) {
+        window.location.href = '/'
+        return
+      }
+
+      setConsents({
+        recording: !!profile?.consent_recording,
+        ai: !!profile?.consent_ai_processing,
+      })
+      setDisplayName(hasRealName ? profile!.display_name! : '')
+      setStep(hasConsent ? 'name' : 'consent')
+      setBootstrapping(false)
+    }
+    bootstrap()
+    return () => { cancelled = true }
+  }, [supabase])
 
   async function handleSendOTP() {
     if (!phone) return
@@ -36,16 +98,48 @@ export default function LoginPage() {
     if (otp.length !== 6) return
     setLoading(true)
     const formatted = phone.startsWith('+') ? phone : `+1${phone.replace(/\D/g, '')}`
-    const { error } = await supabase.auth.verifyOtp({
+    const { data: verifyData, error } = await supabase.auth.verifyOtp({
       phone: formatted,
       token: otp,
       type: 'sms',
     })
-    setLoading(false)
     if (error) {
+      setLoading(false)
       toast.error(error.message)
       return
     }
+
+    // Resume where the user left off: consent → name → home.
+    const userId = verifyData.user?.id
+    if (userId) {
+      const { data: profile } = await supabase
+        .from('neighbors_users')
+        .select('display_name, consent_recording, consent_ai_processing')
+        .eq('id', userId)
+        .maybeSingle()
+
+      const hasConsent = !!profile?.consent_recording && !!profile?.consent_ai_processing
+      const hasRealName =
+        !!profile?.display_name &&
+        profile.display_name.trim() !== '' &&
+        profile.display_name.trim() !== DEFAULT_DISPLAY_NAME
+
+      if (hasConsent && hasRealName) {
+        window.location.href = '/'
+        return
+      }
+
+      setConsents({
+        recording: !!profile?.consent_recording,
+        ai: !!profile?.consent_ai_processing,
+      })
+      setDisplayName(hasRealName ? profile!.display_name! : '')
+      setLoading(false)
+      setStep(hasConsent ? 'name' : 'consent')
+      return
+    }
+
+    setLoading(false)
     setStep('consent')
   }
 
@@ -57,16 +151,55 @@ export default function LoginPage() {
     setLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      await supabase
+      const { error } = await supabase
         .from('neighbors_users')
         .update({
           consent_recording: true,
           consent_ai_processing: true,
         })
         .eq('id', user.id)
+      if (error) {
+        setLoading(false)
+        toast.error('Could not save consent — please try again')
+        return
+      }
     }
     setLoading(false)
+    setStep('name')
+  }
+
+  async function handleSaveName() {
+    const result = validateDisplayName(displayName)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    setLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      setLoading(false)
+      toast.error('Session expired — please sign in again')
+      setStep('phone')
+      return
+    }
+    const { error } = await supabase
+      .from('neighbors_users')
+      .update({ display_name: result.value })
+      .eq('id', user.id)
+    setLoading(false)
+    if (error) {
+      toast.error('Could not save your name — please try again')
+      return
+    }
     window.location.href = '/'
+  }
+
+  if (bootstrapping) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    )
   }
 
   return (
@@ -78,6 +211,7 @@ export default function LoginPage() {
             {step === 'phone' && 'Enter your phone number to get started'}
             {step === 'otp' && 'Enter the code we sent to your phone'}
             {step === 'consent' && 'Before we begin, we need your consent'}
+            {step === 'name' && 'What should your neighbors call you?'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -152,6 +286,35 @@ export default function LoginPage() {
                 </div>
               </div>
               <Button className="w-full" onClick={handleConsent} disabled={loading || !consents.recording || !consents.ai}>
+                {loading ? 'Saving...' : 'Continue'}
+              </Button>
+            </div>
+          )}
+
+          {step === 'name' && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="display-name">Your name</Label>
+                <Input
+                  id="display-name"
+                  type="text"
+                  autoComplete="given-name"
+                  maxLength={NAME_MAX}
+                  placeholder="e.g. Alex Rivera"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">
+                  This is how other neighbors will see you in breakout rooms and connections.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleSaveName}
+                disabled={loading || displayName.trim().length < NAME_MIN}
+              >
                 {loading ? 'Saving...' : 'Continue'}
               </Button>
             </div>

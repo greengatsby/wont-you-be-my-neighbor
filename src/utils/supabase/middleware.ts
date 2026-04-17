@@ -38,15 +38,17 @@ export async function updateSession(request: NextRequest) {
   if (!user && !isPublicPath) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    const redirect = NextResponse.redirect(url)
+    supabaseResponse.cookies.getAll().forEach((c) =>
+      redirect.cookies.set(c.name, c.value)
+    )
+    return redirect
   }
 
-  // Redirect authenticated users away from login
-  if (user && request.nextUrl.pathname === '/login') {
-    const url = request.nextUrl.clone()
-    url.pathname = '/'
-    return NextResponse.redirect(url)
-  }
+  // Note: do NOT redirect authenticated users off /login here — the login page
+  // itself handles the "authenticated but hasn't completed consent" case and
+  // will bounce the user home once consent is recorded. Redirecting here would
+  // race with the (app) layout's consent gate and create a redirect loop.
 
   return supabaseResponse
 }
