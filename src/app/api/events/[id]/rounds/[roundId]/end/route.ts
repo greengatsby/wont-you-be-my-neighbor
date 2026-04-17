@@ -2,11 +2,10 @@ import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
 import { stopRoomRecording } from '@/lib/livekit'
-import { transcribeEventRecordings, processEventInterests } from '@/lib/event-pipeline'
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string; roundId: string } }
 ) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -21,16 +20,24 @@ export async function POST(
 
   const admin = createAdminClient()
 
-  // Stop all active recordings for this event
+  // Verify round belongs to this event and is currently active
+  const { data: round } = await admin
+    .from('neighbors_rounds')
+    .select('id, status')
+    .eq('id', params.roundId)
+    .eq('event_id', params.id)
+    .single()
+
+  if (!round) return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+  if (round.status !== 'active') {
+    return NextResponse.json({ error: 'Round is not active' }, { status: 409 })
+  }
+
+  // Stop egress for all recordings in this round
   const { data: recordings } = await admin
     .from('neighbors_recordings')
-    .select(`
-      id, egress_id,
-      neighbors_breakout_rooms!inner(
-        neighbors_rounds!inner(event_id)
-      )
-    `)
-    .eq('neighbors_breakout_rooms.neighbors_rounds.event_id', params.id)
+    .select('id, egress_id, neighbors_breakout_rooms!inner(round_id)')
+    .eq('neighbors_breakout_rooms.round_id', params.roundId)
     .eq('transcription_status', 'pending')
 
   if (recordings) {
@@ -45,31 +52,12 @@ export async function POST(
     }
   }
 
-  // End all active rounds
+  // Mark round as completed
   await admin
     .from('neighbors_rounds')
     .update({ status: 'completed', ended_at: new Date().toISOString() })
-    .eq('event_id', params.id)
+    .eq('id', params.roundId)
     .eq('status', 'active')
 
-  // End event
-  await admin
-    .from('neighbors_events')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
-    .eq('id', params.id)
-
-  // Run transcription and interest extraction server-side so the admin's browser
-  // closing mid-way cannot leave the event half-processed.
-  const transcriptionResult = await transcribeEventRecordings(params.id, admin)
-  const processingResult = await processEventInterests(params.id, admin)
-
-  return NextResponse.json({
-    ok: true,
-    transcribed: transcriptionResult.transcribed,
-    interestsExtracted: processingResult.interestsExtracted,
-    connectionsCreated: processingResult.connectionsCreated,
-    transcriptionErrors: transcriptionResult.errors.length > 0
-      ? transcriptionResult.errors
-      : undefined,
-  })
+  return NextResponse.json({ ok: true })
 }

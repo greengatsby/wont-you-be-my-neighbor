@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,7 +18,7 @@ interface EventLobbyProps {
 }
 
 export function EventLobby({ event: initialEvent, rounds, user, participantCount: initialCount }: EventLobbyProps) {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const [event, setEvent] = useState(initialEvent)
   const [participantCount, setParticipantCount] = useState(initialCount)
   const [currentRoom, setCurrentRoom] = useState<{
@@ -109,27 +109,20 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
   }
 
   async function handleEndEvent() {
+    toast.loading('Ending event and processing recordings…', { id: 'end-event' })
     const res = await fetch(`/api/events/${event.id}/end`, { method: 'POST' })
+    const data = await res.json()
+
     if (!res.ok) {
-      toast.error('Failed to end event')
+      toast.error('Failed to end event', { id: 'end-event' })
       return
     }
-    toast.success('Event ended! Starting transcription...')
+
     setEvent({ ...event, status: 'ended' })
-
-    // Trigger transcription
-    const transcribeRes = await fetch(`/api/events/${event.id}/transcribe`, { method: 'POST' })
-    const transcribeData = await transcribeRes.json()
-    if (transcribeRes.ok) {
-      toast.success(`Transcribed ${transcribeData.transcribed} recordings`)
-    }
-
-    // Trigger interest extraction + matching
-    const processRes = await fetch(`/api/events/${event.id}/process`, { method: 'POST' })
-    const processData = await processRes.json()
-    if (processRes.ok) {
-      toast.success(`Extracted interests for ${processData.interestsExtracted} participants, created ${processData.connectionsCreated} connections`)
-    }
+    toast.success(
+      `Event ended — transcribed ${data.transcribed ?? 0} recordings, found ${data.connectionsCreated ?? 0} connections`,
+      { id: 'end-event' }
+    )
   }
 
   async function handleStartRound(roundId: string) {
@@ -146,6 +139,16 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
     }
 
     toast.success('Breakout rooms created!')
+  }
+
+  async function handleEndRound(roundId: string) {
+    const res = await fetch(`/api/events/${event.id}/rounds/${roundId}/end`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      toast.error(data.error || 'Failed to end round')
+      return
+    }
+    toast.success('Round ended')
   }
 
   function handleLeaveRoom() {
@@ -262,7 +265,16 @@ export function EventLobby({ event: initialEvent, rounds, user, participantCount
                   Start
                 </Button>
               )}
-              {round.status === 'active' && (
+              {isAdmin && isLive && round.status === 'active' && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => handleEndRound(round.id)}
+                >
+                  End Round
+                </Button>
+              )}
+              {!isAdmin && round.status === 'active' && (
                 <Badge variant="destructive">Active</Badge>
               )}
               {round.status === 'completed' && (

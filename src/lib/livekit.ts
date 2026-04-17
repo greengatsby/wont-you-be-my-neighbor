@@ -31,7 +31,7 @@ export async function startRoomRecording(roomName: string, roomId: string) {
       value: new S3Upload({
         accessKey: process.env.R2_ACCESS_KEY_ID!,
         secret: process.env.R2_SECRET_ACCESS_KEY!,
-        bucket: process.env.R2_BUCKET_NAME || 'youtube-media',
+        bucket: process.env.R2_BUCKET_NAME!,
         endpoint: process.env.R2_ENDPOINT ||
           `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
         region: 'auto',
@@ -46,7 +46,10 @@ export async function startRoomRecording(roomName: string, roomId: string) {
     { audioOnly: true }
   )
 
-  const publicUrl = `${process.env.R2_PUBLIC_URL || 'https://pub-2ec6d3373eac493a9ebf8a03f010cf90.r2.dev'}/${r2Key}`
+  if (!process.env.R2_PUBLIC_URL) {
+    throw new Error('R2_PUBLIC_URL env var is required')
+  }
+  const publicUrl = `${process.env.R2_PUBLIC_URL}/${r2Key}`
 
   return {
     egressId: egressInfo.egressId,

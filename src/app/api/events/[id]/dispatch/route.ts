@@ -21,14 +21,30 @@ export async function POST(
   const { roundId } = await request.json()
   const admin = createAdminClient()
 
-  // Get round info
+  // Get round info — also verify it belongs to this event and is still pending
   const { data: round } = await admin
     .from('neighbors_rounds')
     .select('*')
     .eq('id', roundId)
+    .eq('event_id', params.id)
     .single()
 
   if (!round) return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+  if (round.status !== 'pending') {
+    return NextResponse.json({ error: 'Round already started' }, { status: 409 })
+  }
+
+  // Prevent two active rounds at once
+  const { data: alreadyActive } = await admin
+    .from('neighbors_rounds')
+    .select('id')
+    .eq('event_id', params.id)
+    .eq('status', 'active')
+    .maybeSingle()
+
+  if (alreadyActive) {
+    return NextResponse.json({ error: 'Another round is already active — end it first' }, { status: 409 })
+  }
 
   // Get event participants
   const { data: participants } = await admin
@@ -52,11 +68,17 @@ export async function POST(
     rooms = await createTopicRooms(admin, userIds, round.topic)
   }
 
-  // Mark round as active
-  await admin
+  // Atomically mark round as active — the .eq('status', 'pending') acts as a guard
+  // against a concurrent dispatch that passed the checks above.
+  const { error: activateError } = await admin
     .from('neighbors_rounds')
     .update({ status: 'active', started_at: new Date().toISOString() })
     .eq('id', roundId)
+    .eq('status', 'pending')
+
+  if (activateError) {
+    return NextResponse.json({ error: 'Failed to activate round — may have been dispatched already' }, { status: 409 })
+  }
 
   // Create breakout rooms in DB
   const createdRooms = []
@@ -106,8 +128,17 @@ export async function POST(
   return NextResponse.json({ rooms: createdRooms })
 }
 
+function fisherYatesShuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 function createRandomPairs(userIds: string[]) {
-  const shuffled = [...userIds].sort(() => Math.random() - 0.5)
+  const shuffled = fisherYatesShuffle(userIds)
   const pairs: { userIds: string[] }[] = []
 
   for (let i = 0; i < shuffled.length; i += 2) {
