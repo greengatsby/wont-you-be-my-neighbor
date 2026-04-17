@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,6 +30,9 @@ export function EventLobby({
   const [participantCount, setParticipantCount] = useState(initialCount)
   const [isParticipant, setIsParticipant] = useState(initialIsParticipant)
   const [rsvpPending, setRsvpPending] = useState(false)
+  const [startingEvent, setStartingEvent] = useState(false)
+  const [endingEvent, setEndingEvent] = useState(false)
+  const [pendingRoundId, setPendingRoundId] = useState<string | null>(null)
   const [currentRoom, setCurrentRoom] = useState<{
     roomName: string
     prompt?: string
@@ -37,12 +40,58 @@ export function EventLobby({
     round: any
   } | null>(null)
   const [activeRound, setActiveRound] = useState<any>(null)
+  // Remember round ids the user explicitly left so the fallback poller
+  // doesn't yank them back into the video UI. Keyed by round id — once the
+  // round ends (status != 'active') the entry becomes a no-op naturally.
+  const leftRoundIdsRef = useRef<Set<string>>(new Set())
 
   const isAdmin = user.is_admin
   const isLive = event.status === 'live'
   const isScheduled = event.status === 'scheduled'
   const isEnded = event.status === 'ended'
   const sortedRounds = [...rounds].sort((a, b) => a.round_number - b.round_number)
+
+  // Fallback for realtime races / page reloads during an active round:
+  // poll for any active room the user belongs to in this event. The realtime
+  // INSERT subscription still handles the fast path, but if the client misses
+  // it (subscription not attached in time, websocket hiccup, page reload),
+  // this catches them up within a few seconds.
+  useEffect(() => {
+    if (currentRoom) return
+    if (!isLive) return
+
+    let cancelled = false
+
+    async function checkForActiveRoom() {
+      const { data: memberships } = await supabase
+        .from('neighbors_room_members')
+        .select('room_id, neighbors_breakout_rooms!inner(id, livekit_room_name, topic, round_id, neighbors_rounds!inner(id, event_id, status, prompt))')
+        .eq('user_id', user.id)
+      if (cancelled) return
+      const active = memberships?.find((m: any) => {
+        const r = m.neighbors_breakout_rooms
+        return r?.neighbors_rounds?.event_id === event.id && r?.neighbors_rounds?.status === 'active'
+      })
+      if (active) {
+        const r = (active as any).neighbors_breakout_rooms
+        const roundId = r.neighbors_rounds?.id
+        if (roundId && leftRoundIdsRef.current.has(roundId)) return
+        setCurrentRoom({
+          roomName: r.livekit_room_name,
+          prompt: r.neighbors_rounds?.prompt,
+          topic: r.topic,
+          round: r.neighbors_rounds,
+        })
+      }
+    }
+
+    checkForActiveRoom()
+    const interval = setInterval(checkForActiveRoom, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [currentRoom, isLive, event.id, user.id, supabase])
 
   // Subscribe to real-time updates
   useEffect(() => {
@@ -130,59 +179,96 @@ export function EventLobby({
   }, [event.id, user.id, supabase])
 
   async function handleStartEvent() {
-    const res = await fetch(`/api/events/${event.id}/start`, { method: 'POST' })
-    if (!res.ok) {
-      toast.error('Failed to start event')
-      return
+    if (startingEvent) return
+    setStartingEvent(true)
+    try {
+      const res = await fetch(`/api/events/${event.id}/start`, { method: 'POST' })
+      if (!res.ok) {
+        toast.error('Failed to start event')
+        return
+      }
+      toast.success('Event started!')
+      setEvent({ ...event, status: 'live' })
+    } finally {
+      setStartingEvent(false)
     }
-    toast.success('Event started!')
-    setEvent({ ...event, status: 'live' })
   }
 
   async function handleEndEvent() {
+    if (endingEvent) return
+    setEndingEvent(true)
     toast.loading('Ending event and processing recordings…', { id: 'end-event' })
-    const res = await fetch(`/api/events/${event.id}/end`, { method: 'POST' })
-    const data = await res.json()
-
-    if (!res.ok) {
-      toast.error('Failed to end event', { id: 'end-event' })
-      return
+    try {
+      const res = await fetch(`/api/events/${event.id}/end`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data?.error || 'Failed to end event', { id: 'end-event' })
+        return
+      }
+      setEvent({ ...event, status: 'ended' })
+      toast.success(
+        `Event ended — transcribed ${data.transcribed ?? 0} recordings, found ${data.connectionsCreated ?? 0} connections`,
+        { id: 'end-event' }
+      )
+    } finally {
+      setEndingEvent(false)
     }
-
-    setEvent({ ...event, status: 'ended' })
-    toast.success(
-      `Event ended — transcribed ${data.transcribed ?? 0} recordings, found ${data.connectionsCreated ?? 0} connections`,
-      { id: 'end-event' }
-    )
   }
 
   async function handleStartRound(roundId: string) {
-    const res = await fetch(`/api/events/${event.id}/dispatch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roundId }),
-    })
-
-    if (!res.ok) {
-      const data = await res.json()
-      toast.error(data.error || 'Failed to start round')
-      return
+    if (pendingRoundId) return
+    setPendingRoundId(roundId)
+    try {
+      const res = await fetch(`/api/events/${event.id}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roundId }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data?.error || 'Failed to start round')
+        return
+      }
+      toast.success('Breakout rooms created — joining video…')
+    } finally {
+      setPendingRoundId(null)
     }
-
-    toast.success('Breakout rooms created!')
   }
 
   async function handleEndRound(roundId: string) {
-    const res = await fetch(`/api/events/${event.id}/rounds/${roundId}/end`, { method: 'POST' })
-    if (!res.ok) {
-      const data = await res.json()
-      toast.error(data.error || 'Failed to end round')
-      return
+    if (pendingRoundId) return
+    setPendingRoundId(roundId)
+    try {
+      const res = await fetch(`/api/events/${event.id}/rounds/${roundId}/end`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data?.error || 'Failed to end round')
+        return
+      }
+      toast.success('Round ended')
+    } finally {
+      setPendingRoundId(null)
     }
-    toast.success('Round ended')
   }
 
   function handleLeaveRoom() {
+    if (currentRoom?.round?.id) {
+      leftRoundIdsRef.current.add(currentRoom.round.id)
+    }
+    setCurrentRoom(null)
+  }
+
+  async function handleEndRoundFromVideo() {
+    const roundId = currentRoom?.round?.id
+    if (!roundId) return
+    const res = await fetch(`/api/events/${event.id}/rounds/${roundId}/end`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      toast.error(data?.error || 'Failed to end round')
+      return
+    }
+    toast.success('Round ended')
+    leftRoundIdsRef.current.add(roundId)
     setCurrentRoom(null)
   }
 
@@ -237,6 +323,8 @@ export function EventLobby({
         round={currentRoom.round}
         userName={user.display_name || 'Neighbor'}
         onLeave={handleLeaveRoom}
+        isAdmin={isAdmin}
+        onEndRound={handleEndRoundFromVideo}
       />
     )
   }
@@ -275,14 +363,25 @@ export function EventLobby({
 
           {/* Admin controls — shown first so the host can manage the event */}
           {isAdmin && isScheduled && (
-            <Button onClick={handleStartEvent} className="w-full">
-              Start Event
+            <Button
+              onClick={handleStartEvent}
+              disabled={startingEvent}
+              className="w-full"
+            >
+              {startingEvent ? 'Starting event…' : 'Start Event'}
             </Button>
           )}
 
           {isAdmin && isLive && (
-            <Button variant="destructive" onClick={handleEndEvent} className="w-full">
-              End Event & Process Recordings
+            <Button
+              variant="destructive"
+              onClick={handleEndEvent}
+              disabled={endingEvent}
+              className="w-full"
+            >
+              {endingEvent
+                ? 'Ending event — processing recordings…'
+                : 'End Event & Process Recordings'}
             </Button>
           )}
 
@@ -375,8 +474,9 @@ export function EventLobby({
                 <Button
                   size="sm"
                   onClick={() => handleStartRound(round.id)}
+                  disabled={!!pendingRoundId}
                 >
-                  Start
+                  {pendingRoundId === round.id ? 'Starting…' : 'Start'}
                 </Button>
               )}
               {isAdmin && isLive && round.status === 'active' && (
@@ -384,8 +484,9 @@ export function EventLobby({
                   size="sm"
                   variant="destructive"
                   onClick={() => handleEndRound(round.id)}
+                  disabled={!!pendingRoundId}
                 >
-                  End Round
+                  {pendingRoundId === round.id ? 'Ending…' : 'End Round'}
                 </Button>
               )}
               {!isAdmin && round.status === 'active' && (

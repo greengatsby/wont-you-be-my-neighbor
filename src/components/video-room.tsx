@@ -21,12 +21,24 @@ interface VideoRoomProps {
   round: any
   userName: string
   onLeave: () => void
+  isAdmin?: boolean
+  onEndRound?: () => Promise<void> | void
 }
 
-export function VideoRoom({ roomName, prompt, topic, round, userName, onLeave }: VideoRoomProps) {
+export function VideoRoom({
+  roomName,
+  prompt,
+  topic,
+  round,
+  userName,
+  onLeave,
+  isAdmin,
+  onEndRound,
+}: VideoRoomProps) {
   const [token, setToken] = useState<string | null>(null)
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [endingRound, setEndingRound] = useState(false)
 
   // Fetch LiveKit token
   useEffect(() => {
@@ -121,6 +133,23 @@ export function VideoRoom({ roomName, prompt, topic, round, userName, onLeave }:
                 {formatTime(timeLeft)}
               </span>
             </div>
+          )}
+          {isAdmin && onEndRound && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={endingRound}
+              onClick={async () => {
+                setEndingRound(true)
+                try {
+                  await onEndRound()
+                } finally {
+                  setEndingRound(false)
+                }
+              }}
+            >
+              {endingRound ? 'Ending…' : 'End round for everyone'}
+            </Button>
           )}
         </div>
       </div>
