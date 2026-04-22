@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
+import { ensureMainRoom } from '@/lib/rooms'
 
 export async function POST(
   request: Request,
@@ -10,7 +11,6 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Verify admin
   const { data: profile } = await supabase
     .from('neighbors_users')
     .select('is_admin')
@@ -22,12 +22,18 @@ export async function POST(
   }
 
   const admin = createAdminClient()
-  const { error } = await admin
+  const mainRoomName = await ensureMainRoom(admin, params.id)
+
+  const { error: eventError } = await admin
     .from('neighbors_events')
-    .update({ status: 'live', started_at: new Date().toISOString() })
+    .update({
+      status: 'live',
+      started_at: new Date().toISOString(),
+      livekit_room_name: mainRoomName,
+    })
     .eq('id', params.id)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (eventError) return NextResponse.json({ error: eventError.message }, { status: 500 })
 
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, mainRoomName })
 }

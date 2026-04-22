@@ -68,11 +68,18 @@ export async function POST(
     rooms = await createTopicRooms(admin, userIds, round.topic)
   }
 
+  const startedAt = new Date()
+  const endsAt = new Date(startedAt.getTime() + round.duration_seconds * 1000)
+
   // Atomically mark round as active — the .eq('status', 'pending') acts as a guard
   // against a concurrent dispatch that passed the checks above.
   const { error: activateError } = await admin
     .from('neighbors_rounds')
-    .update({ status: 'active', started_at: new Date().toISOString() })
+    .update({
+      status: 'active',
+      started_at: startedAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+    })
     .eq('id', roundId)
     .eq('status', 'pending')
 
@@ -80,15 +87,28 @@ export async function POST(
     return NextResponse.json({ error: 'Failed to activate round — may have been dispatched already' }, { status: 409 })
   }
 
-  // Create breakout rooms in DB
+  // Close whatever rooms users are currently in (main, ad-hoc, or a prior
+  // breakout) so client reconciliation treats the new breakout membership
+  // as the sole active one.
+  const allAssignedUsers = rooms.flatMap((r) => r.userIds)
+  if (allAssignedUsers.length > 0) {
+    await admin
+      .from('neighbors_room_members')
+      .update({ left_at: startedAt.toISOString() })
+      .in('user_id', allAssignedUsers)
+      .is('left_at', null)
+  }
+
   const createdRooms = []
   for (const room of rooms) {
     const roomName = `breakout-${roundId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 
     const { data: breakoutRoom } = await admin
-      .from('neighbors_breakout_rooms')
+      .from('neighbors_rooms')
       .insert({
+        event_id: params.id,
         round_id: roundId,
+        room_type: 'breakout',
         livekit_room_name: roomName,
         topic: room.topic || round.topic || null,
       })
@@ -96,15 +116,20 @@ export async function POST(
       .single()
 
     if (breakoutRoom) {
-      // Add members
-      await admin.from('neighbors_room_members').insert(
+      // Upsert so a user who was previously in this exact room (e.g. after a
+      // manual reassignment) gets their existing row reopened rather than
+      // violating the (room_id, user_id) uniqueness constraint.
+      await admin.from('neighbors_room_members').upsert(
         room.userIds.map((uid) => ({
           room_id: breakoutRoom.id,
           user_id: uid,
-        }))
+          joined_at: startedAt.toISOString(),
+          left_at: null,
+          role: 'participant',
+        })),
+        { onConflict: 'room_id,user_id' }
       )
 
-      // Start recording the breakout room
       try {
         const recording = await startRoomRecording(roomName, breakoutRoom.id)
         await admin.from('neighbors_recordings').insert({
@@ -115,7 +140,6 @@ export async function POST(
         })
       } catch (err) {
         console.error(`Failed to start recording for room ${breakoutRoom.id}:`, err)
-        // Don't block room creation if recording fails
       }
 
       createdRooms.push({

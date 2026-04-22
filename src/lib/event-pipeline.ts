@@ -18,17 +18,20 @@ export async function transcribeEventRecordings(
   eventId: string,
   admin: SupabaseClient
 ): Promise<TranscriptionResult> {
+  // Only transcribe breakout rooms — main/adhoc rooms have too many
+  // overlapping speakers for diarization to be useful.
   const { data: recordings } = await admin
     .from('neighbors_recordings')
     .select(`
       id, storage_url, room_id,
-      neighbors_breakout_rooms!inner(
-        id,
+      neighbors_rooms!inner(
+        id, room_type,
         neighbors_rounds!inner(event_id),
         neighbors_room_members(user_id)
       )
     `)
-    .eq('neighbors_breakout_rooms.neighbors_rounds.event_id', eventId)
+    .eq('neighbors_rooms.neighbors_rounds.event_id', eventId)
+    .eq('neighbors_rooms.room_type', 'breakout')
     .eq('transcription_status', 'pending')
 
   if (!recordings?.length) {
@@ -58,7 +61,7 @@ export async function transcribeEventRecordings(
       // Map AssemblyAI speaker letters (A, B, …) to room member IDs by join order.
       // NOTE: this mapping is best-effort — diarization order may not match DB order.
       const roomMembers =
-        (recording.neighbors_breakout_rooms as any)?.neighbors_room_members || []
+        (recording.neighbors_rooms as any)?.neighbors_room_members || []
       const memberIds = roomMembers.map((m: any) => m.user_id)
 
       const transcriptInserts = segments.map((seg) => ({
@@ -111,12 +114,13 @@ export async function processEventInterests(
     .from('neighbors_recordings')
     .select(`
       *,
-      neighbors_breakout_rooms!inner(
-        round_id,
+      neighbors_rooms!inner(
+        round_id, room_type,
         neighbors_rounds!inner(event_id)
       )
     `)
-    .eq('neighbors_breakout_rooms.neighbors_rounds.event_id', eventId)
+    .eq('neighbors_rooms.neighbors_rounds.event_id', eventId)
+    .eq('neighbors_rooms.room_type', 'breakout')
     .eq('transcription_status', 'completed')
 
   if (!recordings?.length) {

@@ -17,11 +17,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'roomName required' }, { status: 400 })
   }
 
-  // Verify the room exists and this user is assigned to it
   const admin = createAdminClient()
+
   const { data: room } = await admin
-    .from('neighbors_breakout_rooms')
-    .select('id')
+    .from('neighbors_rooms')
+    .select('id, event_id, neighbors_events!inner(host_id)')
     .eq('livekit_room_name', roomName)
     .maybeSingle()
 
@@ -29,15 +29,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
 
-  const { data: membership } = await supabase
-    .from('neighbors_room_members')
-    .select('id')
-    .eq('room_id', room.id)
-    .eq('user_id', user.id)
-    .maybeSingle()
+  const hostId = (room.neighbors_events as any)?.host_id
+  const isHost = hostId === user.id
 
-  if (!membership) {
-    return NextResponse.json({ error: 'Not assigned to this room' }, { status: 403 })
+  if (!isHost) {
+    const { data: membership } = await supabase
+      .from('neighbors_room_members')
+      .select('id')
+      .eq('room_id', room.id)
+      .eq('user_id', user.id)
+      .is('left_at', null)
+      .maybeSingle()
+
+    if (!membership) {
+      return NextResponse.json({ error: 'Not assigned to this room' }, { status: 403 })
+    }
   }
 
   const { data: profile } = await supabase

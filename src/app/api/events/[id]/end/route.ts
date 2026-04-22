@@ -21,16 +21,14 @@ export async function POST(
 
   const admin = createAdminClient()
 
-  // Stop all active recordings for this event
+  // Stop all active recordings for this event (main room + any breakouts)
   const { data: recordings } = await admin
     .from('neighbors_recordings')
     .select(`
       id, egress_id,
-      neighbors_breakout_rooms!inner(
-        neighbors_rounds!inner(event_id)
-      )
+      neighbors_rooms!inner(event_id)
     `)
-    .eq('neighbors_breakout_rooms.neighbors_rounds.event_id', params.id)
+    .eq('neighbors_rooms.event_id', params.id)
     .eq('transcription_status', 'pending')
 
   if (recordings) {
@@ -45,17 +43,33 @@ export async function POST(
     }
   }
 
+  const endedAt = new Date().toISOString()
+
   // End all active rounds
   await admin
     .from('neighbors_rounds')
-    .update({ status: 'completed', ended_at: new Date().toISOString() })
+    .update({ status: 'completed', ended_at: endedAt })
     .eq('event_id', params.id)
     .eq('status', 'active')
+
+  // Close all open room memberships for this event's rooms.
+  const { data: eventRooms } = await admin
+    .from('neighbors_rooms')
+    .select('id')
+    .eq('event_id', params.id)
+
+  if (eventRooms?.length) {
+    await admin
+      .from('neighbors_room_members')
+      .update({ left_at: endedAt })
+      .in('room_id', eventRooms.map((r) => r.id))
+      .is('left_at', null)
+  }
 
   // End event
   await admin
     .from('neighbors_events')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .update({ status: 'ended', ended_at: endedAt })
     .eq('id', params.id)
 
   // Run transcription and interest extraction server-side so the admin's browser

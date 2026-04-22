@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "12.2.3 (519615d)"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       admin_validations: {
@@ -1763,6 +1738,7 @@ export type Database = {
           is_active: boolean | null
           last_seen_at: string | null
           organization_id: string | null
+          phone: string | null
           role: Database["public"]["Enums"]["user_role"] | null
           screenshots_enabled: boolean
           timezone: string | null
@@ -1777,6 +1753,7 @@ export type Database = {
           is_active?: boolean | null
           last_seen_at?: string | null
           organization_id?: string | null
+          phone?: string | null
           role?: Database["public"]["Enums"]["user_role"] | null
           screenshots_enabled?: boolean
           timezone?: string | null
@@ -1791,6 +1768,7 @@ export type Database = {
           is_active?: boolean | null
           last_seen_at?: string | null
           organization_id?: string | null
+          phone?: string | null
           role?: Database["public"]["Enums"]["user_role"] | null
           screenshots_enabled?: boolean
           timezone?: string | null
@@ -2241,6 +2219,254 @@ export type Database = {
           },
         ]
       }
+      er_bookings: {
+        Row: {
+          admin_notes: string | null
+          calendly_event_uri: string | null
+          confirmed_at: string | null
+          confirmed_by_email: string | null
+          created_at: string
+          id: string
+          invitee_email: string | null
+          invitee_name: string | null
+          raw_payload: Json
+          scheduled_at: string | null
+          session_id: string | null
+        }
+        Insert: {
+          admin_notes?: string | null
+          calendly_event_uri?: string | null
+          confirmed_at?: string | null
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          invitee_email?: string | null
+          invitee_name?: string | null
+          raw_payload: Json
+          scheduled_at?: string | null
+          session_id?: string | null
+        }
+        Update: {
+          admin_notes?: string | null
+          calendly_event_uri?: string | null
+          confirmed_at?: string | null
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          invitee_email?: string | null
+          invitee_name?: string | null
+          raw_payload?: Json
+          scheduled_at?: string | null
+          session_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "er_bookings_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "er_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      er_logs: {
+        Row: {
+          admin_email: string | null
+          context: Json | null
+          created_at: string
+          event: string
+          id: number
+          level: string
+          message: string | null
+          session_id: string | null
+          source: string
+        }
+        Insert: {
+          admin_email?: string | null
+          context?: Json | null
+          created_at?: string
+          event: string
+          id?: number
+          level: string
+          message?: string | null
+          session_id?: string | null
+          source: string
+        }
+        Update: {
+          admin_email?: string | null
+          context?: Json | null
+          created_at?: string
+          event?: string
+          id?: number
+          level?: string
+          message?: string | null
+          session_id?: string | null
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "er_logs_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "er_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      er_messages: {
+        Row: {
+          created_at: string
+          id: number
+          parts: Json
+          role: string
+          seq: number
+          session_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: number
+          parts: Json
+          role: string
+          seq: number
+          session_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: number
+          parts?: Json
+          role?: string
+          seq?: number
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "er_messages_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "er_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      er_prompt_versions: {
+        Row: {
+          content: Json
+          created_at: string
+          created_by_email: string | null
+          id: string
+          is_active: boolean
+          notes: string | null
+          version_number: number
+        }
+        Insert: {
+          content: Json
+          created_at?: string
+          created_by_email?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          version_number: number
+        }
+        Update: {
+          content?: Json
+          created_at?: string
+          created_by_email?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          version_number?: number
+        }
+        Relationships: []
+      }
+      er_sessions: {
+        Row: {
+          coach: string | null
+          completed_at: string | null
+          flow: string
+          id: string
+          last_activity_at: string
+          prompt_version_id: string | null
+          q8_baseline: number | null
+          ref: string | null
+          reset_at: string | null
+          scores: Json
+          started_at: string
+          user_agent: string | null
+          user_name: string | null
+        }
+        Insert: {
+          coach?: string | null
+          completed_at?: string | null
+          flow: string
+          id?: string
+          last_activity_at?: string
+          prompt_version_id?: string | null
+          q8_baseline?: number | null
+          ref?: string | null
+          reset_at?: string | null
+          scores?: Json
+          started_at?: string
+          user_agent?: string | null
+          user_name?: string | null
+        }
+        Update: {
+          coach?: string | null
+          completed_at?: string | null
+          flow?: string
+          id?: string
+          last_activity_at?: string
+          prompt_version_id?: string | null
+          q8_baseline?: number | null
+          ref?: string | null
+          reset_at?: string | null
+          scores?: Json
+          started_at?: string
+          user_agent?: string | null
+          user_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "er_sessions_prompt_version_id_fkey"
+            columns: ["prompt_version_id"]
+            isOneToOne: false
+            referencedRelation: "er_prompt_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      er_users: {
+        Row: {
+          claimed_at: string | null
+          created_at: string
+          email: string | null
+          id: string
+          note: string | null
+          phone: string | null
+          role: string
+          supabase_user_id: string | null
+        }
+        Insert: {
+          claimed_at?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          note?: string | null
+          phone?: string | null
+          role?: string
+          supabase_user_id?: string | null
+        }
+        Update: {
+          claimed_at?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string
+          note?: string | null
+          phone?: string | null
+          role?: string
+          supabase_user_id?: string | null
+        }
+        Relationships: []
+      }
       esm_ai_conversations: {
         Row: {
           created_at: string | null
@@ -2302,6 +2528,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      esm_champion_signups: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          idea_key: string
+          idea_title: string
+          motivation: string | null
+          name: string
+          phone: string | null
+          role: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          idea_key: string
+          idea_title: string
+          motivation?: string | null
+          name: string
+          phone?: string | null
+          role: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          idea_key?: string
+          idea_title?: string
+          motivation?: string | null
+          name?: string
+          phone?: string | null
+          role?: string
+        }
+        Relationships: []
       }
       esm_conversation_events: {
         Row: {
@@ -2501,6 +2763,153 @@ export type Database = {
           },
         ]
       }
+      esm_idea_comments: {
+        Row: {
+          comment: string
+          created_at: string
+          id: string
+          idea_key: string
+          user_name: string
+        }
+        Insert: {
+          comment: string
+          created_at?: string
+          id?: string
+          idea_key: string
+          user_name: string
+        }
+        Update: {
+          comment?: string
+          created_at?: string
+          id?: string
+          idea_key?: string
+          user_name?: string
+        }
+        Relationships: []
+      }
+      esm_idea_reactions: {
+        Row: {
+          created_at: string
+          id: string
+          idea_key: string
+          user_name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          idea_key: string
+          user_name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          idea_key?: string
+          user_name?: string
+        }
+        Relationships: []
+      }
+      esm_idea_submissions: {
+        Row: {
+          anything: string | null
+          champion: string | null
+          created_at: string
+          embedding: string | null
+          id: string
+          idea: string | null
+          idea_en: string | null
+          idea_es: string | null
+          invest: string | null
+          model: string | null
+          more: string | null
+          more_en: string | null
+          more_es: string | null
+          name: string
+          obstacles: string | null
+          source_lang: string | null
+          theme: string | null
+        }
+        Insert: {
+          anything?: string | null
+          champion?: string | null
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          idea?: string | null
+          idea_en?: string | null
+          idea_es?: string | null
+          invest?: string | null
+          model?: string | null
+          more?: string | null
+          more_en?: string | null
+          more_es?: string | null
+          name: string
+          obstacles?: string | null
+          source_lang?: string | null
+          theme?: string | null
+        }
+        Update: {
+          anything?: string | null
+          champion?: string | null
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          idea?: string | null
+          idea_en?: string | null
+          idea_es?: string | null
+          invest?: string | null
+          model?: string | null
+          more?: string | null
+          more_en?: string | null
+          more_es?: string | null
+          name?: string
+          obstacles?: string | null
+          source_lang?: string | null
+          theme?: string | null
+        }
+        Relationships: []
+      }
+      esm_ideas: {
+        Row: {
+          champion_name: string | null
+          created_at: string
+          desc_en: string
+          desc_es: string
+          embedding: string | null
+          id: string
+          is_published: boolean
+          momentum: string
+          theme: string
+          title_en: string
+          title_es: string
+        }
+        Insert: {
+          champion_name?: string | null
+          created_at?: string
+          desc_en: string
+          desc_es: string
+          embedding?: string | null
+          id?: string
+          is_published?: boolean
+          momentum?: string
+          theme: string
+          title_en: string
+          title_es: string
+        }
+        Update: {
+          champion_name?: string | null
+          created_at?: string
+          desc_en?: string
+          desc_es?: string
+          embedding?: string | null
+          id?: string
+          is_published?: boolean
+          momentum?: string
+          theme?: string
+          title_en?: string
+          title_es?: string
+        }
+        Relationships: []
+      }
       esm_ingest_events: {
         Row: {
           created_at: string | null
@@ -2670,6 +3079,33 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           name?: string
+        }
+        Relationships: []
+      }
+      esm_why_notes: {
+        Row: {
+          created_at: string
+          id: string
+          lang: string | null
+          note: string
+          paragraph_id: string
+          user_name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          lang?: string | null
+          note: string
+          paragraph_id: string
+          user_name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          lang?: string | null
+          note?: string
+          paragraph_id?: string
+          user_name?: string
         }
         Relationships: []
       }
@@ -4002,38 +4438,6 @@ export type Database = {
           },
         ]
       }
-      neighbors_breakout_rooms: {
-        Row: {
-          created_at: string | null
-          id: string
-          livekit_room_name: string
-          round_id: string
-          topic: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          id?: string
-          livekit_room_name: string
-          round_id: string
-          topic?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          id?: string
-          livekit_room_name?: string
-          round_id?: string
-          topic?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "neighbors_breakout_rooms_round_id_fkey"
-            columns: ["round_id"]
-            isOneToOne: false
-            referencedRelation: "neighbors_rounds"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       neighbors_connections: {
         Row: {
           contact_shared_a: boolean | null
@@ -4259,7 +4663,7 @@ export type Database = {
             foreignKeyName: "neighbors_recordings_room_id_fkey"
             columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "neighbors_breakout_rooms"
+            referencedRelation: "neighbors_rooms"
             referencedColumns: ["id"]
           },
         ]
@@ -4269,6 +4673,7 @@ export type Database = {
           id: string
           joined_at: string | null
           left_at: string | null
+          role: string
           room_id: string
           user_id: string
         }
@@ -4276,6 +4681,7 @@ export type Database = {
           id?: string
           joined_at?: string | null
           left_at?: string | null
+          role?: string
           room_id: string
           user_id: string
         }
@@ -4283,6 +4689,7 @@ export type Database = {
           id?: string
           joined_at?: string | null
           left_at?: string | null
+          role?: string
           room_id?: string
           user_id?: string
         }
@@ -4291,7 +4698,7 @@ export type Database = {
             foreignKeyName: "neighbors_room_members_room_id_fkey"
             columns: ["room_id"]
             isOneToOne: false
-            referencedRelation: "neighbors_breakout_rooms"
+            referencedRelation: "neighbors_rooms"
             referencedColumns: ["id"]
           },
           {
@@ -4303,11 +4710,57 @@ export type Database = {
           },
         ]
       }
+      neighbors_rooms: {
+        Row: {
+          created_at: string | null
+          event_id: string
+          id: string
+          livekit_room_name: string
+          room_type: string
+          round_id: string | null
+          topic: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          event_id: string
+          id?: string
+          livekit_room_name: string
+          room_type?: string
+          round_id?: string | null
+          topic?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          event_id?: string
+          id?: string
+          livekit_room_name?: string
+          room_type?: string
+          round_id?: string | null
+          topic?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "neighbors_breakout_rooms_round_id_fkey"
+            columns: ["round_id"]
+            isOneToOne: false
+            referencedRelation: "neighbors_rounds"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "neighbors_rooms_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "neighbors_events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       neighbors_rounds: {
         Row: {
           created_at: string | null
           duration_seconds: number
           ended_at: string | null
+          ends_at: string | null
           event_id: string
           id: string
           prompt: string | null
@@ -4321,6 +4774,7 @@ export type Database = {
           created_at?: string | null
           duration_seconds?: number
           ended_at?: string | null
+          ends_at?: string | null
           event_id: string
           id?: string
           prompt?: string | null
@@ -4334,6 +4788,7 @@ export type Database = {
           created_at?: string | null
           duration_seconds?: number
           ended_at?: string | null
+          ends_at?: string | null
           event_id?: string
           id?: string
           prompt?: string | null
@@ -10670,6 +11125,28 @@ export type Database = {
       current_user_is_admin: { Args: never; Returns: boolean }
       current_user_org_id: { Args: never; Returns: string }
       delete_faq_tag: { Args: { tag: string }; Returns: undefined }
+      er_activate_prompt_version: { Args: { p_id: string }; Returns: undefined }
+      er_claim_or_insert_user: {
+        Args: { p_email: string; p_phone: string; p_user_id: string }
+        Returns: {
+          id: string
+          role: string
+        }[]
+      }
+      er_create_prompt_version: {
+        Args: { p_content: Json; p_created_by_email: string; p_notes: string }
+        Returns: {
+          id: string
+          version_number: number
+        }[]
+      }
+      er_log_level_counts: {
+        Args: never
+        Returns: {
+          count: number
+          level: string
+        }[]
+      }
       get_current_voice_tenant_id: { Args: never; Returns: string }
       get_table_schema: {
         Args: { table_name: string }
@@ -10727,9 +11204,25 @@ export type Database = {
           source: string
         }[]
       }
+      match_ideas: {
+        Args: {
+          match_count: number
+          match_threshold: number
+          query_embedding: string
+        }
+        Returns: {
+          idea_key: string
+          similarity: number
+        }[]
+      }
       merge_faq_tags: {
         Args: { source_tag: string; target_tag: string }
         Returns: undefined
+      }
+      neighbors_is_admin: { Args: { uid: string }; Returns: boolean }
+      neighbors_is_event_participant: {
+        Args: { evt: string; uid: string }
+        Returns: boolean
       }
       news_run_daily_job: { Args: never; Returns: undefined }
       register_get_user_org_ids: { Args: never; Returns: string[] }
@@ -10952,9 +11445,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       admin_validation_priority: ["critical", "normal", "low"],

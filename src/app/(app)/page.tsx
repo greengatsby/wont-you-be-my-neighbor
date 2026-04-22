@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Calendar, Users } from 'lucide-react'
 import { format, isToday, isTomorrow } from 'date-fns'
+import { StartSessionButton } from '@/components/start-session-button'
 
 function formatEventTime(scheduledAt: string | null) {
   if (!scheduledAt) return 'Date TBD'
@@ -17,7 +18,6 @@ function formatEventTime(scheduledAt: string | null) {
 
 export default async function EventsPage() {
   const supabase = await createClient()
-
   const { data: { user } } = await supabase.auth.getUser()
 
   const [{ data: events }, { data: profile }] = await Promise.all([
@@ -43,9 +43,12 @@ export default async function EventsPage() {
           </p>
         </div>
         {isAdmin && (
-          <Button asChild variant="outline">
-            <Link href="/admin">Manage events</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <StartSessionButton />
+            <Button asChild variant="outline">
+              <Link href="/admin">Manage events</Link>
+            </Button>
+          </div>
         )}
       </div>
 
@@ -59,7 +62,7 @@ export default async function EventsPage() {
               <p className="font-medium">No upcoming events yet</p>
               <p className="text-sm text-muted-foreground">
                 {isAdmin
-                  ? 'Head to the admin page to schedule the first one.'
+                  ? 'Spin up a quick session now or head to admin to schedule one.'
                   : 'Check back soon — a host will schedule one shortly.'}
               </p>
             </div>

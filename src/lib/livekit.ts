@@ -2,6 +2,7 @@ import {
   EgressClient,
   EncodedFileOutput,
   EncodedFileType,
+  RoomServiceClient,
   S3Upload,
 } from 'livekit-server-sdk'
 
@@ -11,6 +12,23 @@ const apiSecret = process.env.LIVEKIT_API_SECRET!
 
 export function getEgressClient() {
   return new EgressClient(livekitUrl, apiKey, apiSecret)
+}
+
+export function getRoomClient() {
+  return new RoomServiceClient(livekitUrl, apiKey, apiSecret)
+}
+
+// Explicitly create a LiveKit room with a long empty-timeout. Needed for the
+// main event room, which must survive periods where everyone has moved to
+// breakouts — the default 5-minute empty-timeout would tear it down.
+export async function ensureRoom(name: string, emptyTimeoutSeconds = 4 * 60 * 60) {
+  const client = getRoomClient()
+  try {
+    await client.createRoom({ name, emptyTimeout: emptyTimeoutSeconds })
+  } catch (err: any) {
+    // Already exists is fine — createRoom is not idempotent server-side.
+    if (!/already exists/i.test(err?.message || '')) throw err
+  }
 }
 
 /**
