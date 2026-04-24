@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
+import { breakoutLogServer } from '@/lib/breakout-debug-log'
 
 // Called when a user enters the event lobby. Opens (or reopens) their
 // membership in the main room so the client can reconcile on realtime
@@ -11,7 +12,10 @@ export async function POST(
 ) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!user) {
+    breakoutLogServer('join-main', 'unauthorized', 'POST', { eventId: params.id })
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const admin = createAdminClient()
 
@@ -21,7 +25,10 @@ export async function POST(
     .eq('id', params.id)
     .single()
 
-  if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  if (!event) {
+    breakoutLogServer('join-main', 'event_not_found', '404', { eventId: params.id, userId: user.id })
+    return NextResponse.json({ error: 'Event not found' }, { status: 404 })
+  }
 
   const isHost = event.host_id === user.id
 
@@ -33,6 +40,7 @@ export async function POST(
       .eq('user_id', user.id)
       .maybeSingle()
     if (!rsvp) {
+      breakoutLogServer('join-main', 'forbidden', 'not participant', { eventId: params.id, userId: user.id })
       return NextResponse.json({ error: 'Not a participant of this event' }, { status: 403 })
     }
   }
@@ -45,6 +53,7 @@ export async function POST(
     .maybeSingle()
 
   if (!mainRoom) {
+    breakoutLogServer('join-main', 'no_main_room', 'event not started', { eventId: params.id, userId: user.id })
     return NextResponse.json({ error: 'Event has not started yet' }, { status: 409 })
   }
 
@@ -62,6 +71,11 @@ export async function POST(
   )
 
   if (inNonMain) {
+    breakoutLogServer('join-main', 'skipped', 'user already in breakout/adhoc', {
+      eventId: params.id,
+      userId: user.id,
+      mainRoomName: mainRoom.livekit_room_name,
+    })
     return NextResponse.json({ ok: true, mainRoomName: mainRoom.livekit_room_name, skipped: true })
   }
 
@@ -76,5 +90,12 @@ export async function POST(
     { onConflict: 'room_id,user_id' }
   )
 
+  breakoutLogServer('join-main', 'upsert_main', 'opened main membership', {
+    eventId: params.id,
+    userId: user.id,
+    mainRoomId: mainRoom.id,
+    mainRoomName: mainRoom.livekit_room_name,
+    role: isHost ? 'host' : 'participant',
+  })
   return NextResponse.json({ ok: true, mainRoomName: mainRoom.livekit_room_name })
 }

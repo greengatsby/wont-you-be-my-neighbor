@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
-import { stopRoomRecording } from '@/lib/livekit'
+import { breakoutLogServer, breakoutLogServerError } from '@/lib/breakout-debug-log'
+import { deleteLiveKitRoom, stopRoomRecording } from '@/lib/livekit'
 import { moveUsersToRoom, requireEventHost } from '@/lib/rooms'
+import { logEvent } from '@/lib/pipeline-logger'
 
 // Pull every participant back to the main room. Ends any active round as a
 // side effect (stopping its egresses) and also evacuates ad-hoc rooms.
@@ -11,6 +13,7 @@ export async function POST(
   const auth = await requireEventHost(params.id)
   if (auth instanceof Response) return auth
   const { admin } = auth
+  breakoutLogServer('return-to-main', 'start', 'host return all', { eventId: params.id })
 
   const endedAt = new Date().toISOString()
 
@@ -32,6 +35,10 @@ export async function POST(
     .select('id')
 
   if (endedRounds?.length) {
+    breakoutLogServer('return-to-main', 'end_active_rounds', 'ended', {
+      eventId: params.id,
+      roundIds: endedRounds.map((r) => r.id),
+    })
     const roundIds = endedRounds.map((r) => r.id)
     const { data: recordings } = await admin
       .from('neighbors_recordings')
@@ -44,9 +51,46 @@ export async function POST(
         try {
           await stopRoomRecording(recording.egress_id)
         } catch (err) {
+          breakoutLogServerError('return-to-main', 'egress_stop_failed', err, {
+            eventId: params.id,
+            egress_id: recording.egress_id,
+          })
           console.error(`Failed to stop egress ${recording.egress_id}:`, err)
+          await logEvent({
+            pipeline: 'livekit.egress.stop',
+            entityType: 'recording',
+            error: err,
+            metadata: {
+              event_id: params.id,
+              egress_id: recording.egress_id,
+              triggered_by: 'return_to_main',
+            },
+          })
         }
       }
+    }
+
+    // Tear down the LiveKit breakout rooms tied to the ended rounds.
+    const { data: breakoutRooms } = await admin
+      .from('neighbors_rooms')
+      .select('id, livekit_room_name')
+      .in('round_id', roundIds)
+      .eq('room_type', 'breakout')
+
+    if (breakoutRooms?.length) {
+      await Promise.all(
+        breakoutRooms.map(async (r) => {
+          try {
+            await deleteLiveKitRoom(r.livekit_room_name)
+          } catch (err) {
+            breakoutLogServerError('return-to-main', 'livekit_delete_failed', err, {
+              eventId: params.id,
+              roomId: r.id,
+              livekitRoomName: r.livekit_room_name,
+            })
+          }
+        })
+      )
     }
   }
 
@@ -60,8 +104,14 @@ export async function POST(
 
   const userIds = [...new Set((stragglers || []).map((m) => m.user_id))]
   if (userIds.length === 0) {
+    breakoutLogServer('return-to-main', 'no_stragglers', 'everyone on main or empty', { eventId: params.id })
     return NextResponse.json({ ok: true, moved: 0 })
   }
+  breakoutLogServer('return-to-main', 'stragglers', 'moving to main', {
+    eventId: params.id,
+    userCount: userIds.length,
+    userIds,
+  })
 
   const { data: mainRoom } = await admin
     .from('neighbors_rooms')
@@ -82,5 +132,6 @@ export async function POST(
     await moveUsersToRoom(admin, [event.host_id], mainRoom.id, 'host')
   }
 
+  breakoutLogServer('return-to-main', 'complete', 'ok', { eventId: params.id, moved: userIds.length })
   return NextResponse.json({ ok: true, moved: userIds.length })
 }

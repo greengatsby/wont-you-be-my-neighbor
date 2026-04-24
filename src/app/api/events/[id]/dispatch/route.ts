@@ -1,7 +1,9 @@
 import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
+import { breakoutLogServer, breakoutLogServerError } from '@/lib/breakout-debug-log'
 import { startRoomRecording } from '@/lib/livekit'
+import { logEvent } from '@/lib/pipeline-logger'
 
 export async function POST(
   request: Request,
@@ -9,17 +11,28 @@ export async function POST(
 ) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!user) {
+    breakoutLogServer('dispatch', 'unauthorized', 'POST rejected', { eventId: params.id })
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const { data: profile } = await supabase
     .from('neighbors_users')
     .select('is_admin')
     .eq('id', user.id)
     .single()
-  if (!profile?.is_admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!profile?.is_admin) {
+    breakoutLogServer('dispatch', 'forbidden', 'not admin', { eventId: params.id, userId: user.id })
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   const { roundId } = await request.json()
   const admin = createAdminClient()
+  breakoutLogServer('dispatch', 'start', 'admin dispatch round', {
+    eventId: params.id,
+    roundId,
+    userId: user.id,
+  })
 
   // Get round info — also verify it belongs to this event and is still pending
   const { data: round } = await admin
@@ -29,8 +42,16 @@ export async function POST(
     .eq('event_id', params.id)
     .single()
 
-  if (!round) return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+  if (!round) {
+    breakoutLogServer('dispatch', 'round_not_found', 'bad roundId', { eventId: params.id, roundId })
+    return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+  }
   if (round.status !== 'pending') {
+    breakoutLogServer('dispatch', 'round_not_pending', 'cannot dispatch', {
+      eventId: params.id,
+      roundId,
+      status: round.status,
+    })
     return NextResponse.json({ error: 'Round already started' }, { status: 409 })
   }
 
@@ -43,6 +64,10 @@ export async function POST(
     .maybeSingle()
 
   if (alreadyActive) {
+    breakoutLogServer('dispatch', 'blocked', 'another round active', {
+      eventId: params.id,
+      activeRoundId: alreadyActive.id,
+    })
     return NextResponse.json({ error: 'Another round is already active — end it first' }, { status: 409 })
   }
 
@@ -53,6 +78,7 @@ export async function POST(
     .eq('event_id', params.id)
 
   if (!participants?.length) {
+    breakoutLogServer('dispatch', 'no_participants', 'empty event', { eventId: params.id, roundId })
     return NextResponse.json({ error: 'No participants' }, { status: 400 })
   }
 
@@ -67,6 +93,15 @@ export async function POST(
   } else if (round.round_type === 'topic') {
     rooms = await createTopicRooms(admin, userIds, round.topic)
   }
+
+  breakoutLogServer('dispatch', 'assignments', 'computed groups', {
+    eventId: params.id,
+    roundId,
+    roundType: round.round_type,
+    participantCount: userIds.length,
+    groupCount: rooms.length,
+    groups: rooms.map((r) => ({ n: r.userIds.length, topic: r.topic ?? null })),
+  })
 
   const startedAt = new Date()
   const endsAt = new Date(startedAt.getTime() + round.duration_seconds * 1000)
@@ -84,8 +119,19 @@ export async function POST(
     .eq('status', 'pending')
 
   if (activateError) {
+    breakoutLogServer('dispatch', 'activate_failed', 'concurrent dispatch?', {
+      eventId: params.id,
+      roundId,
+      dbError: activateError.message,
+    })
     return NextResponse.json({ error: 'Failed to activate round — may have been dispatched already' }, { status: 409 })
   }
+  breakoutLogServer('dispatch', 'round_activated', 'ok', {
+    eventId: params.id,
+    roundId,
+    startedAt: startedAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+  })
 
   // Close whatever rooms users are currently in (main, ad-hoc, or a prior
   // breakout) so client reconciliation treats the new breakout membership
@@ -97,6 +143,11 @@ export async function POST(
       .update({ left_at: startedAt.toISOString() })
       .in('user_id', allAssignedUsers)
       .is('left_at', null)
+    breakoutLogServer('dispatch', 'cleared_old_memberships', 'assigned users', {
+      eventId: params.id,
+      roundId,
+      userCount: allAssignedUsers.length,
+    })
   }
 
   const createdRooms = []
@@ -116,6 +167,14 @@ export async function POST(
       .single()
 
     if (breakoutRoom) {
+      breakoutLogServer('dispatch', 'breakout_row', 'room + members', {
+        eventId: params.id,
+        roundId,
+        roomId: breakoutRoom.id,
+        livekitRoomName: roomName,
+        memberCount: room.userIds.length,
+        memberUserIds: room.userIds,
+      })
       // Upsert so a user who was previously in this exact room (e.g. after a
       // manual reassignment) gets their existing row reopened rather than
       // violating the (room_id, user_id) uniqueness constraint.
@@ -138,8 +197,33 @@ export async function POST(
           storage_url: recording.storageUrl,
           transcription_status: 'pending',
         })
+        await logEvent({
+          pipeline: 'livekit.egress.start',
+          entityId: breakoutRoom.id,
+          entityType: 'room',
+          userId: user.id,
+          metadata: {
+            event_id: params.id,
+            round_id: roundId,
+            egress_id: recording.egressId,
+            room_name: roomName,
+          },
+        })
       } catch (err) {
+        breakoutLogServerError('dispatch', 'egress_start_failed', err, {
+          eventId: params.id,
+          roomId: breakoutRoom.id,
+          livekitRoomName: roomName,
+        })
         console.error(`Failed to start recording for room ${breakoutRoom.id}:`, err)
+        await logEvent({
+          pipeline: 'livekit.egress.start',
+          entityId: breakoutRoom.id,
+          entityType: 'room',
+          userId: user.id,
+          error: err,
+          metadata: { event_id: params.id, round_id: roundId, room_name: roomName },
+        })
       }
 
       createdRooms.push({
@@ -149,6 +233,12 @@ export async function POST(
     }
   }
 
+  breakoutLogServer('dispatch', 'complete', 'response', {
+    eventId: params.id,
+    roundId,
+    createdCount: createdRooms.length,
+    roomIds: createdRooms.map((r: { id: string }) => r.id),
+  })
   return NextResponse.json({ rooms: createdRooms })
 }
 

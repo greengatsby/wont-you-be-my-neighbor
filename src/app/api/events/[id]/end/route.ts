@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/utils/supabase/admin'
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
-import { stopRoomRecording } from '@/lib/livekit'
+import { deleteLiveKitRoom, stopRoomRecording } from '@/lib/livekit'
 import { transcribeEventRecordings, processEventInterests } from '@/lib/event-pipeline'
 
 export async function POST(
@@ -55,7 +55,7 @@ export async function POST(
   // Close all open room memberships for this event's rooms.
   const { data: eventRooms } = await admin
     .from('neighbors_rooms')
-    .select('id')
+    .select('id, livekit_room_name, room_type')
     .eq('event_id', params.id)
 
   if (eventRooms?.length) {
@@ -64,6 +64,43 @@ export async function POST(
       .update({ left_at: endedAt })
       .in('room_id', eventRooms.map((r) => r.id))
       .is('left_at', null)
+
+    // Delete every LiveKit room for this event — main, breakouts, adhoc.
+    // Idempotent if LiveKit already auto-closed them. Done in parallel.
+    await Promise.all(
+      eventRooms.map(async (r) => {
+        try {
+          await deleteLiveKitRoom(r.livekit_room_name)
+        } catch (err) {
+          console.error(`Failed to delete LiveKit room ${r.livekit_room_name}:`, err)
+        }
+      })
+    )
+
+    // Remove empty breakout / adhoc rows so the next time we look at the
+    // event's room list we don't see stale entries. Main room stays so its
+    // recordings remain linked for transcription.
+    const disposableRoomIds = eventRooms
+      .filter((r) => r.room_type !== 'main')
+      .map((r) => r.id)
+    if (disposableRoomIds.length > 0) {
+      // Only delete rooms that have no associated recordings — preserve
+      // anything that captured audio so transcription + connection
+      // extraction downstream still work.
+      const { data: roomsWithRecordings } = await admin
+        .from('neighbors_recordings')
+        .select('room_id')
+        .in('room_id', disposableRoomIds)
+
+      const keepIds = new Set((roomsWithRecordings || []).map((r) => r.room_id))
+      const deletableIds = disposableRoomIds.filter((id) => !keepIds.has(id))
+      if (deletableIds.length > 0) {
+        await admin
+          .from('neighbors_rooms')
+          .delete()
+          .in('id', deletableIds)
+      }
+    }
   }
 
   // End event

@@ -77,9 +77,39 @@ export async function startRoomRecording(roomName: string, roomId: string) {
 }
 
 /**
- * Stop an egress recording.
+ * Stop an egress recording. Idempotent: if LiveKit has already moved the
+ * egress to a terminal state (e.g. auto-aborted when the room emptied),
+ * stopEgress returns 412 failed_precondition — treat that as success.
  */
 export async function stopRoomRecording(egressId: string) {
   const client = getEgressClient()
-  return client.stopEgress(egressId)
+  try {
+    return await client.stopEgress(egressId)
+  } catch (err: any) {
+    const alreadyTerminal =
+      err?.code === 'failed_precondition' ||
+      err?.status === 412 ||
+      /cannot be stopped|already|aborted|complete/i.test(err?.message || '')
+    if (alreadyTerminal) return null
+    throw err
+  }
+}
+
+/**
+ * Delete a LiveKit room by name. Idempotent: if the room has already been
+ * cleaned up (auto-closed after emptyTimeout, never existed, etc.) we treat
+ * that as success. Disconnects any still-connected participants.
+ */
+export async function deleteLiveKitRoom(roomName: string) {
+  const client = getRoomClient()
+  try {
+    await client.deleteRoom(roomName)
+  } catch (err: any) {
+    const notFound =
+      err?.code === 'not_found' ||
+      err?.status === 404 ||
+      /not found|does not exist/i.test(err?.message || '')
+    if (notFound) return
+    throw err
+  }
 }

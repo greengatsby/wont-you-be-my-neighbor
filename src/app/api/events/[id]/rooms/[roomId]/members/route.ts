@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { breakoutLogServer } from '@/lib/breakout-debug-log'
 import { moveUsersToRoom, requireEventHost } from '@/lib/rooms'
 
 // Move one or more users into this room. Closes their current memberships
@@ -13,9 +14,14 @@ export async function POST(
   const { admin } = auth
 
   const body = await request.json().catch(() => ({}))
+  breakoutLogServer('rooms.members', 'start', 'host move', {
+    eventId: params.id,
+    targetRoomId: params.roomId,
+  })
   const userIds: string[] = Array.isArray(body.user_ids) ? body.user_ids : []
 
   if (userIds.length === 0) {
+    breakoutLogServer('rooms.members', 'bad_request', 'empty user_ids', { eventId: params.id })
     return NextResponse.json({ error: 'user_ids required' }, { status: 400 })
   }
 
@@ -25,10 +31,23 @@ export async function POST(
     .eq('id', params.roomId)
     .single()
 
-  if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  if (!room) {
+    breakoutLogServer('rooms.members', 'not_found', 'room', { eventId: params.id, roomId: params.roomId })
+    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  }
   if (room.event_id !== params.id) {
+    breakoutLogServer('rooms.members', 'bad_request', 'room wrong event', {
+      eventId: params.id,
+      roomId: params.roomId,
+    })
     return NextResponse.json({ error: 'Room does not belong to this event' }, { status: 400 })
   }
+  breakoutLogServer('rooms.members', 'move', 'resolving', {
+    eventId: params.id,
+    targetRoomId: room.id,
+    roomType: room.room_type,
+    userIds,
+  })
 
   const { data: event } = await admin
     .from('neighbors_events')
@@ -47,5 +66,6 @@ export async function POST(
     await moveUsersToRoom(admin, [hostId!], room.id, 'host')
   }
 
+  breakoutLogServer('rooms.members', 'complete', 'ok', { eventId: params.id, moved: userIds.length })
   return NextResponse.json({ ok: true, moved: userIds.length })
 }

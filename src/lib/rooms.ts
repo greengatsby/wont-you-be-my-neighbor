@@ -1,6 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/utils/supabase/server'
 import { createAdminClient } from '@/utils/supabase/admin'
+import { breakoutLogServer } from '@/lib/breakout-debug-log'
 import { ensureRoom, startRoomRecording } from '@/lib/livekit'
 
 /**
@@ -16,6 +17,12 @@ export async function moveUsersToRoom(
 ) {
   if (userIds.length === 0) return
   const now = new Date().toISOString()
+  breakoutLogServer('moveUsersToRoom', 'closing_open_memberships', 'before', {
+    userCount: userIds.length,
+    userIds,
+    targetRoomId: targetRoomId,
+    role,
+  })
 
   await admin
     .from('neighbors_room_members')
@@ -33,6 +40,11 @@ export async function moveUsersToRoom(
     })),
     { onConflict: 'room_id,user_id' }
   )
+  breakoutLogServer('moveUsersToRoom', 'upserted_target_membership', 'after', {
+    userCount: userIds.length,
+    targetRoomId: targetRoomId,
+    role,
+  })
 }
 
 /**

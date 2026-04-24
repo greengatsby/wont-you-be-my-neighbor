@@ -7,9 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
+import { breakoutLogClient } from '@/lib/breakout-debug-log'
 import { VideoRoom } from '@/components/video-room'
 import { HostControls } from '@/components/host-controls'
-import { Users, Clock, MessageSquare } from 'lucide-react'
+import { MonitorGrid } from '@/components/monitor-grid'
+import { Users, Clock, MessageSquare, Share2 } from 'lucide-react'
 
 interface EventLobbyProps {
   event: any
@@ -67,15 +69,26 @@ export function EventLobby({
 
     const room: any = membership?.neighbors_rooms
     if (room && room.event_id === event.id) {
-      setCurrentRoom({
+      const next = {
         id: room.id,
         livekit_room_name: room.livekit_room_name,
         room_type: room.room_type,
         topic: room.topic,
         round_id: room.round_id,
+      }
+      setCurrentRoom(next)
+      breakoutLogClient('reconcile', 'open_membership', 'current room for user', {
+        eventId: event.id,
+        userId: user.id,
+        room: next,
       })
     } else {
       setCurrentRoom(null)
+      breakoutLogClient('reconcile', 'no_room', 'no open membership for this event', {
+        eventId: event.id,
+        userId: user.id,
+        hasMembership: Boolean(membership),
+      })
     }
   }, [supabase, user.id, event.id])
 
@@ -90,11 +103,21 @@ export function EventLobby({
     async function joinMain() {
       const res = await fetch(`/api/events/${event.id}/join-main`, { method: 'POST' })
       if (cancelled) return
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        console.error('Failed to join main room:', data.error)
+        breakoutLogClient('join_main', 'http_error', 'failed to open main membership', {
+          eventId: event.id,
+          status: res.status,
+          error: (data as { error?: string }).error,
+        })
+        console.error('Failed to join main room:', (data as { error?: string }).error)
         return
       }
+      breakoutLogClient('join_main', 'ok', 'join-main response', {
+        eventId: event.id,
+        skipped: (data as { skipped?: boolean }).skipped === true,
+        mainRoomName: (data as { mainRoomName?: string }).mainRoomName,
+      })
       await reconcileRoom()
     }
 
@@ -149,6 +172,22 @@ export function EventLobby({
     return () => { supabase.removeChannel(channel) }
   }, [event.id, user.id, supabase, reconcileRoom])
 
+  useEffect(() => {
+    if (!isLive || (!isParticipant && !isHost)) return
+    breakoutLogClient('room_state', 'currentRoom_changed', 'in live lobby', {
+      eventId: event.id,
+      currentRoom: currentRoom
+        ? {
+            id: currentRoom.id,
+            room_type: currentRoom.room_type,
+            livekit_room_name: currentRoom.livekit_room_name,
+            round_id: currentRoom.round_id,
+          }
+        : null,
+      activeRoundId: activeRound?.id ?? null,
+    })
+  }, [isLive, isParticipant, isHost, event.id, currentRoom, activeRound?.id])
+
   // Client-side timer + idempotent auto-end when it hits zero.
   useEffect(() => {
     if (!activeRound?.ends_at) {
@@ -163,8 +202,26 @@ export function EventLobby({
 
       if (remaining === 0 && endedRoundRef.current !== activeRound.id) {
         endedRoundRef.current = activeRound.id
+        breakoutLogClient('round_timer', 'auto_end', 'calling round end', {
+          eventId: event.id,
+          roundId: activeRound.id,
+        })
         fetch(`/api/events/${event.id}/rounds/${activeRound.id}/end`, { method: 'POST' })
-          .catch((err) => console.error('Auto-end failed:', err))
+          .then((r) => {
+            breakoutLogClient('round_timer', 'auto_end_response', r.ok ? 'ok' : 'http_error', {
+              eventId: event.id,
+              roundId: activeRound.id,
+              status: r.status,
+            })
+          })
+          .catch((err) => {
+            breakoutLogClient('round_timer', 'auto_end_failed', 'fetch error', {
+              eventId: event.id,
+              roundId: activeRound.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            console.error('Auto-end failed:', err)
+          })
       }
     }
     tick()
@@ -203,20 +260,44 @@ export function EventLobby({
     }
   }
 
+  async function handleShareLink() {
+    const url = `${window.location.origin}/events/${event.id}/lobby`
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Link copied — paste it anywhere to invite someone')
+    } catch {
+      toast.error('Could not copy — link: ' + url)
+    }
+  }
+
   async function handleStartRound(roundId: string) {
     if (pendingRoundId) return
     setPendingRoundId(roundId)
+    breakoutLogClient('dispatch', 'request', 'start round (admin dispatch)', { eventId: event.id, roundId })
     try {
       const res = await fetch(`/api/events/${event.id}/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roundId }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data?.error || 'Failed to start round')
+        breakoutLogClient('dispatch', 'response_error', 'failed', {
+          eventId: event.id,
+          roundId,
+          status: res.status,
+          error: (data as { error?: string }).error,
+        })
+        toast.error((data as { error?: string })?.error || 'Failed to start round')
         return
       }
+      breakoutLogClient('dispatch', 'response_ok', 'round started', {
+        eventId: event.id,
+        roundId,
+        roomCount: Array.isArray((data as { rooms?: unknown[] }).rooms)
+          ? (data as { rooms: unknown[] }).rooms.length
+          : 0,
+      })
       toast.success('Round started')
     } finally {
       setPendingRoundId(null)
@@ -226,16 +307,49 @@ export function EventLobby({
   async function handleEndRound(roundId: string) {
     if (pendingRoundId) return
     setPendingRoundId(roundId)
+    breakoutLogClient('round_end', 'request', 'manual end round', { eventId: event.id, roundId })
     try {
       const res = await fetch(`/api/events/${event.id}/rounds/${roundId}/end`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data?.error || 'Failed to end round')
+        breakoutLogClient('round_end', 'response_error', 'failed', {
+          eventId: event.id,
+          roundId,
+          status: res.status,
+          error: (data as { error?: string }).error,
+        })
+        toast.error((data as { error?: string })?.error || 'Failed to end round')
         return
       }
+      breakoutLogClient('round_end', 'response_ok', 'ended', {
+        eventId: event.id,
+        roundId,
+        alreadyEnded: (data as { alreadyEnded?: boolean }).alreadyEnded,
+      })
       toast.success('Round ended')
     } finally {
       setPendingRoundId(null)
+    }
+  }
+
+  async function handleJumpIn(roomId: string) {
+    breakoutLogClient('jump_in', 'request', 'host jump to breakout', { eventId: event.id, roomId, userId: user.id })
+    const res = await fetch(`/api/events/${event.id}/rooms/${roomId}/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_ids: [user.id] }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      breakoutLogClient('jump_in', 'response_error', 'failed', {
+        eventId: event.id,
+        roomId,
+        status: res.status,
+        error: (data as { error?: string }).error,
+      })
+      toast.error((data as { error?: string })?.error || 'Failed to join room')
+    } else {
+      breakoutLogClient('jump_in', 'response_ok', 'ok', { eventId: event.id, roomId })
     }
   }
 
@@ -396,7 +510,7 @@ export function EventLobby({
       : (currentRoom?.topic || 'Room')
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
+    <div className="max-w-7xl mx-auto space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold">{event.title}</h1>
@@ -411,6 +525,10 @@ export function EventLobby({
               </span>
             </div>
           )}
+          <Button size="sm" variant="outline" onClick={handleShareLink}>
+            <Share2 className="h-4 w-4" />
+            Share
+          </Button>
           {isHost && (
             <Button
               size="sm"
@@ -424,34 +542,50 @@ export function EventLobby({
         </div>
       </div>
 
-      {inBreakout && activePrompt && (
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="py-3 flex items-start gap-2">
-            <MessageSquare className="h-4 w-4 mt-0.5 text-primary" />
-            <p className="text-sm font-medium">{activePrompt}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      <div style={{ height: 'calc(100vh - 280px)', minHeight: 360 }}>
-        {currentRoom ? (
-          <VideoRoom roomName={currentRoom.livekit_room_name} />
-        ) : (
-          <Card className="h-full">
-            <CardContent className="h-full flex items-center justify-center text-sm text-muted-foreground">
-              Connecting to event…
-            </CardContent>
-          </Card>
+      <div className={isHost ? 'grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]' : ''}>
+        {isHost && (
+          <div className="lg:max-h-[calc(100vh-140px)] lg:overflow-y-auto lg:pr-1">
+            <HostControls
+              eventId={event.id}
+              currentUserId={user.id}
+              currentRoomId={currentRoom?.id || null}
+              activeRoundId={activeRound?.id ?? null}
+              activeRoundPrompt={activeRound?.prompt ?? null}
+            />
+          </div>
         )}
-      </div>
 
-      {isHost && (
-        <HostControls
-          eventId={event.id}
-          currentUserId={user.id}
-          currentRoomId={currentRoom?.id || null}
-        />
-      )}
+        <div className="space-y-4 min-w-0">
+          {inBreakout && activePrompt && (
+            <Card className="bg-primary/5 border-primary/20">
+              <CardContent className="py-3 flex items-start gap-2">
+                <MessageSquare className="h-4 w-4 mt-0.5 text-primary" />
+                <p className="text-sm font-medium">{activePrompt}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <div style={{ height: 'calc(100vh - 200px)', minHeight: 360 }}>
+            {currentRoom ? (
+              isHost && currentRoom.room_type === 'main' && activeRound ? (
+                <MonitorGrid
+                  eventId={event.id}
+                  activeRoundId={activeRound.id}
+                  onJumpIn={handleJumpIn}
+                />
+              ) : (
+                <VideoRoom roomName={currentRoom.livekit_room_name} />
+              )
+            ) : (
+              <Card className="h-full">
+                <CardContent className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                  Connecting to event…
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
+      </div>
 
       {isHost && sortedRounds.length > 0 && (
         <Card>
