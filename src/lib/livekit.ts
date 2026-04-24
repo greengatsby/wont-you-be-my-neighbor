@@ -5,6 +5,9 @@ import {
   RoomServiceClient,
   S3Upload,
 } from 'livekit-server-sdk'
+import { EgressStatus } from '@livekit/protocol'
+
+export { EgressStatus }
 
 const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL!
 const apiKey = process.env.LIVEKIT_API_KEY!
@@ -73,6 +76,24 @@ export async function startRoomRecording(roomName: string, roomId: string) {
     egressId: egressInfo.egressId,
     r2Key,
     storageUrl: publicUrl,
+  }
+}
+
+/**
+ * Fetch the current status of an egress from LiveKit. Returns null if the
+ * egress cannot be looked up (e.g. retention window expired).
+ */
+export async function getEgressStatus(
+  egressId: string
+): Promise<{ status: EgressStatus; error?: string } | null> {
+  const client = getEgressClient()
+  try {
+    const list = await client.listEgress({ egressId })
+    const info = list[0]
+    if (!info) return null
+    return { status: info.status, error: info.error || undefined }
+  } catch {
+    return null
   }
 }
 

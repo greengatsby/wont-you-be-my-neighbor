@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
+import { REGEXP_ONLY_DIGITS } from 'input-otp'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -254,7 +255,13 @@ export default function LoginPage() {
           {step === 'otp' && (
             <div className="space-y-4">
               <div className="flex justify-center">
-                <InputOTP maxLength={6} value={otp} onChange={setOtp}>
+                <InputOTP
+                  maxLength={6}
+                  value={otp}
+                  onChange={setOtp}
+                  pattern={REGEXP_ONLY_DIGITS}
+                  pasteTransformer={(pasted) => (pasted.match(/\d/g) ?? []).join('').slice(0, 6)}
+                >
                   <InputOTPGroup>
                     <InputOTPSlot index={0} />
                     <InputOTPSlot index={1} />

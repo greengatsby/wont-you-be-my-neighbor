@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { transcribeFromUrl } from '@/lib/transcription'
 import { PipelineLogger, logEvent } from '@/lib/pipeline-logger'
 import { existsInR2 } from '@/lib/r2'
+import { getEgressStatus, EgressStatus } from '@/lib/livekit'
 
 const anthropic = new Anthropic()
 
@@ -61,20 +62,18 @@ export async function transcribeEventRecordings(
 
   try {
     logger.startStep('fetch_recordings')
-    // Only transcribe breakout rooms — main/adhoc rooms have too many
-    // overlapping speakers for diarization to be useful.
+    // Transcribe every pending recording for this event (main, breakout, adhoc).
+    // Diarization quality degrades past ~6 speakers but is still useful.
     const { data: recordings } = await admin
       .from('neighbors_recordings')
       .select(`
-        id, storage_url, room_id,
+        id, storage_url, room_id, egress_id,
         neighbors_rooms!inner(
-          id, room_type,
-          neighbors_rounds!inner(event_id),
+          id, room_type, event_id,
           neighbors_room_members(user_id)
         )
       `)
-      .eq('neighbors_rooms.neighbors_rounds.event_id', eventId)
-      .eq('neighbors_rooms.room_type', 'breakout')
+      .eq('neighbors_rooms.event_id', eventId)
       .eq('transcription_status', 'pending')
     logger.endStep('fetch_recordings')
     logger.log(`Found ${recordings?.length || 0} pending recordings`)
@@ -100,12 +99,30 @@ export async function transcribeEventRecordings(
           throw new Error('No storage URL for recording')
         }
 
+        // Check LiveKit egress state before waiting on R2 — if the egress was
+        // aborted or failed, the object will never appear and we should
+        // fast-fail instead of sitting on HeadObject for 60s.
+        if (recording.egress_id) {
+          const eg = await getEgressStatus(recording.egress_id)
+          if (eg) {
+            const terminalNoOutput =
+              eg.status === EgressStatus.EGRESS_ABORTED ||
+              eg.status === EgressStatus.EGRESS_FAILED ||
+              eg.status === EgressStatus.EGRESS_LIMIT_REACHED
+            if (terminalNoOutput) {
+              throw new Error(
+                `LiveKit egress ended with no usable output (${EgressStatus[eg.status]}${eg.error ? `: ${eg.error}` : ''}). No audio was captured — likely the room emptied before anyone spoke.`
+              )
+            }
+          }
+        }
+
         const key = r2KeyFromStorageUrl(recording.storage_url)
         if (key) {
           const ready = await waitForR2Upload(key)
           if (!ready) {
             throw new Error(
-              `R2 object never finalized within timeout: ${key}. LiveKit egress may still be uploading.`
+              `R2 object never finalized within timeout: ${key}. LiveKit egress may still be uploading or never wrote a file.`
             )
           }
         }
@@ -205,12 +222,10 @@ export async function processEventInterests(
       .select(`
         *,
         neighbors_rooms!inner(
-          round_id, room_type,
-          neighbors_rounds!inner(event_id)
+          round_id, room_type, event_id
         )
       `)
-      .eq('neighbors_rooms.neighbors_rounds.event_id', eventId)
-      .eq('neighbors_rooms.room_type', 'breakout')
+      .eq('neighbors_rooms.event_id', eventId)
       .eq('transcription_status', 'completed')
 
     if (!recordings?.length) {
@@ -251,7 +266,7 @@ export async function processEventInterests(
 
       try {
         const response = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           messages: [
             {

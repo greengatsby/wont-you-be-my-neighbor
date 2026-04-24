@@ -208,8 +208,7 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
     return map
   }, [data])
 
-  const breakoutRooms = (data?.rooms || []).filter((r) => r.room_type === 'breakout')
-  const otherRooms = (data?.rooms || []).filter((r) => r.room_type !== 'breakout')
+  const allRooms = data?.rooms || []
 
   const recordingCounts = useMemo(() => {
     const counts = { total: 0, completed: 0, failed: 0, pending: 0, processing: 0 }
@@ -277,13 +276,13 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Breakout rooms & recordings</CardTitle>
+          <CardTitle className="text-base">Rooms & recordings</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {breakoutRooms.length === 0 && (
-            <p className="text-sm text-muted-foreground">No breakout rooms for this event.</p>
+          {allRooms.length === 0 && (
+            <p className="text-sm text-muted-foreground">No rooms for this event.</p>
           )}
-          {breakoutRooms.map((room) => {
+          {allRooms.map((room) => {
             const recs = recordingsByRoom[room.id] || []
             const members = membersByRoom[room.id] || []
             return (
@@ -296,7 +295,7 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
                       {members.map((m) => userName(m.user_id)).join(', ') || '—'}
                     </div>
                   </div>
-                  <Badge variant="outline">breakout</Badge>
+                  <Badge variant="outline">{room.room_type}</Badge>
                 </div>
 
                 {recs.length === 0 ? (
@@ -360,28 +359,6 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
           })}
         </CardContent>
       </Card>
-
-      {otherRooms.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Main / adhoc rooms</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {otherRooms.map((room) => {
-              const recs = recordingsByRoom[room.id] || []
-              return (
-                <div key={room.id} className="flex items-center gap-2 flex-wrap text-xs border rounded p-2">
-                  <Badge variant="outline">{room.room_type}</Badge>
-                  <span className="font-mono">{room.livekit_room_name}</span>
-                  <span className="text-muted-foreground">
-                    {recs.length} recording{recs.length === 1 ? '' : 's'} (not transcribed — too many speakers)
-                  </span>
-                </div>
-              )
-            })}
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>
