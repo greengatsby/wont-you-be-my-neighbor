@@ -9,7 +9,7 @@ export default async function LobbyPage({
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  if (!user) redirect(`/login?redirectTo=${encodeURIComponent(`/events/${params.id}/lobby`)}`)
 
   const [{ data: event }, { data: profile }, { count }, { data: membership }] = await Promise.all([
     supabase

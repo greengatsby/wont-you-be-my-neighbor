@@ -2,6 +2,9 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function updateSession(request: NextRequest) {
+  // Expose path+search to server components (used by the (app) consent gate
+  // to build its own ?redirectTo= when bouncing to /login).
+  request.headers.set('x-pathname', request.nextUrl.pathname + request.nextUrl.search)
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
