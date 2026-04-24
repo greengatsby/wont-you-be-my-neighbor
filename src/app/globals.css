@@ -93,3 +93,14 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Show full video frame inside the participant tile, with a blurred backdrop
+   filling any leftover space. Prevents faces getting cropped when someone
+   joins on a portrait-oriented phone. */
+.lk-portrait-safe .lk-participant-tile {
+  background: transparent !important;
+}
+.lk-portrait-safe .lk-participant-tile > video,
+.lk-portrait-safe video.lk-participant-media-video {
+  object-fit: contain !important;
+}

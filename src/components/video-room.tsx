@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { breakoutLogClient, breakoutLogClientError } from '@/lib/breakout-debug-log'
 import {
   ConnectionStateToast,
@@ -186,7 +186,7 @@ function SpotlightLayout() {
         style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
       >
         {cameraTracks.map((t) => (
-          <ParticipantTile key={tileKey(t)} trackRef={t} />
+          <PortraitSafeTile key={tileKey(t)} trackRef={t} />
         ))}
       </div>
     )
@@ -194,18 +194,14 @@ function SpotlightLayout() {
 
   return (
     <div className="flex flex-col h-full gap-1 p-1">
-      <div
-        className={`flex-1 min-h-0 relative rounded-md overflow-hidden transition-shadow ${
-          isLive ? 'ring-2 ring-primary ring-inset' : ''
-        }`}
-      >
-        <ParticipantTile trackRef={spotlight} />
+      <div className="flex-1 min-h-0">
+        <PortraitSafeTile trackRef={spotlight} highlight={isLive} />
       </div>
       {others.length > 0 && (
         <div className="flex gap-1 shrink-0 h-[22%] min-h-[80px] overflow-x-auto">
           {others.map((t) => (
             <div key={tileKey(t)} className="relative shrink-0 aspect-video h-full">
-              <ParticipantTile trackRef={t} />
+              <PortraitSafeTile trackRef={t} />
             </div>
           ))}
         </div>
@@ -216,4 +212,53 @@ function SpotlightLayout() {
 
 function tileKey(trackRef: TrackReferenceOrPlaceholder) {
   return `${trackRef.participant.identity}-${trackRef.source}`
+}
+
+function PortraitSafeTile({
+  trackRef,
+  highlight = false,
+}: {
+  trackRef: TrackReferenceOrPlaceholder
+  highlight?: boolean
+}) {
+  return (
+    <div
+      className={`lk-portrait-safe relative w-full h-full overflow-hidden rounded-md bg-black transition-shadow ${
+        highlight ? 'ring-2 ring-primary ring-inset' : ''
+      }`}
+    >
+      <BackdropVideo trackRef={trackRef} />
+      <div className="relative h-full">
+        <ParticipantTile trackRef={trackRef} />
+      </div>
+    </div>
+  )
+}
+
+function BackdropVideo({ trackRef }: { trackRef: TrackReferenceOrPlaceholder }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const track = trackRef.publication?.track
+  useEffect(() => {
+    const el = videoRef.current
+    if (!el || !track) return
+    track.attach(el)
+    return () => {
+      track.detach(el)
+    }
+  }, [track])
+  if (!track) return null
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      muted
+      playsInline
+      aria-hidden
+      className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+      style={{
+        transform: 'scale(1.15)',
+        filter: 'blur(32px) brightness(0.55)',
+      }}
+    />
+  )
 }
