@@ -16,6 +16,7 @@ import {
   XCircle,
   Clock,
   ExternalLink,
+  Download,
 } from 'lucide-react'
 
 interface Recording {
@@ -142,6 +143,67 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
     fetchData()
   }, [fetchData])
 
+  function handleDownloadTranscript() {
+    if (!data) return
+    const nameOf = (id: string | null) => {
+      if (!id) return 'Unknown'
+      return data.users[id]?.display_name || id.slice(0, 8) + '…'
+    }
+    const ts = (s: number | null) => {
+      if (s === null || s === undefined) return '     '
+      const m = Math.floor(s / 60)
+      const sec = Math.floor(s % 60)
+      return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+    }
+
+    const byRoom: Record<string, Transcript[]> = {}
+    for (const t of data.transcripts) {
+      const rec = data.recordings.find((r) => r.id === t.recording_id)
+      const roomId = rec?.room_id ?? 'unknown'
+      byRoom[roomId] = byRoom[roomId] || []
+      byRoom[roomId].push(t)
+    }
+
+    const lines: string[] = []
+    lines.push(data.event.title)
+    if (data.event.ended_at) lines.push(`Ended: ${new Date(data.event.ended_at).toLocaleString()}`)
+    lines.push('')
+
+    for (const room of data.rooms) {
+      const segs = byRoom[room.id]
+      if (!segs?.length) continue
+      const members = (data.members.filter((m) => m.room_id === room.id))
+        .map((m) => nameOf(m.user_id))
+        .join(', ')
+      lines.push(`## ${room.livekit_room_name} (${room.room_type})`)
+      if (members) lines.push(`Members: ${members}`)
+      lines.push('')
+      segs
+        .slice()
+        .sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0))
+        .forEach((seg) => {
+          lines.push(`[${ts(seg.start_time)}] ${nameOf(seg.speaker_user_id)}: ${seg.text}`)
+        })
+      lines.push('')
+    }
+
+    if (lines.length <= 3) {
+      toast.error('No transcript segments to download')
+      return
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const slug = (data.event.title || 'event').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'event'
+    a.download = `${slug}-transcript.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   async function handleRetry() {
     setRetrying(true)
     try {
@@ -250,6 +312,16 @@ export function EventDetailViewer({ eventId }: { eventId: string }) {
         <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
           <RefreshCw className={`w-4 h-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
           Refresh
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleDownloadTranscript}
+          disabled={!data?.transcripts.length}
+          title={!data?.transcripts.length ? 'No transcript segments yet' : ''}
+        >
+          <Download className="w-4 h-4 mr-1" />
+          Download transcript
         </Button>
         <Button
           size="sm"
